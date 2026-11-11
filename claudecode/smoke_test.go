@@ -123,8 +123,21 @@ func TestSmokeAgainstMockAPI(t *testing.T) {
 // TestSmokeCancelKillsBashChild cancels a run while the Bash built-in waits on
 // a long-lived child and checks that the child goes with the run.
 func TestSmokeCancelKillsBashChild(t *testing.T) {
+	smokeCancelBash(t, stopGrace)
+}
+
+// TestSmokeCancelKillsBashChildOnKill leaves claude no time to clean up: the
+// Bash child sits in its own session, so only the descendant kill reaches it.
+func TestSmokeCancelKillsBashChildOnKill(t *testing.T) {
+	smokeCancelBash(t, time.Millisecond)
+}
+
+func smokeCancelBash(t *testing.T, grace time.Duration) {
+	t.Helper()
+
 	binary, mockURL := smokeTarget(t)
 	spec, opts, stream := smokeRun(t, binary, mockURL)
+	opts.grace = grace
 	spec.Task = "Run the command."
 	spec.BuiltinTools = []string{"Bash"}
 

@@ -153,8 +153,9 @@ func (p *Proc) Lines() <-chan []byte { return p.lines }
 // StderrTail returns the last 16 KiB of stderr.
 func (p *Proc) StderrTail() string { return p.tail.String() }
 
-// Stop sends SIGTERM to the process group and SIGKILL after grace. It is
-// idempotent and returns nil once the process has exited.
+// Stop sends SIGTERM to the process group and SIGKILL after grace, to the
+// group and, on Linux, to every descendant that left it. It is idempotent and
+// returns nil once the process has exited.
 func (p *Proc) Stop(grace time.Duration) error {
 	p.abandonLines()
 
@@ -176,6 +177,8 @@ func (p *Proc) Stop(grace time.Duration) error {
 		return nil
 	case <-timer.C:
 	}
+
+	killDescendants(p.cmd.Process.Pid)
 
 	err := p.signalGroup(syscall.SIGKILL)
 

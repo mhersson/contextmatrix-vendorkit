@@ -38,6 +38,14 @@ func spawnSleeper() *exec.Cmd {
 	return gc
 }
 
+// block parks the helper; a bare select{} would die of the runtime's deadlock
+// detector instead of waiting for a signal.
+func block() {
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
 func runHelper(mode string) {
 	switch mode {
 	case "lines":
@@ -63,7 +71,7 @@ func runHelper(mode string) {
 
 		fmt.Println("ready")
 
-		select {}
+		block()
 	case "leaderexits":
 		gc := spawnSleeper()
 		if err := gc.Start(); err != nil {
@@ -73,11 +81,28 @@ func runHelper(mode string) {
 		_ = os.WriteFile(os.Getenv("SUBPROC_PIDFILE"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600) //nolint:gosec // test-supplied path
 
 		fmt.Println("hi")
+	case "escape":
+		// A setsid grandchild leaves the group, as Claude Code's Bash tool does.
+		signal.Ignore(syscall.SIGTERM)
+
+		gc := spawnSleeper()
+		gc.Stdout = nil
+		gc.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+		if err := gc.Start(); err != nil {
+			os.Exit(2)
+		}
+
+		_ = os.WriteFile(os.Getenv("SUBPROC_PIDFILE"), []byte(strconv.Itoa(gc.Process.Pid)), 0o600) //nolint:gosec // test-supplied path
+
+		fmt.Println("ready")
+
+		block()
 	case "ignoreterm":
 		signal.Ignore(syscall.SIGTERM)
 		fmt.Println("ready")
 
-		select {}
+		block()
 	case "stderr":
 		for range 40 {
 			fmt.Fprint(os.Stderr, strings.Repeat("a", 1023)+"\n")
