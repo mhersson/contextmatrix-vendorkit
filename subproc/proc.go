@@ -271,7 +271,7 @@ func (p *Proc) readStdout(r io.Reader) {
 		}
 
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
+			if !errors.Is(err, io.EOF) {
 				p.setReadErr(fmt.Errorf("read stdout: %w", err))
 			}
 
