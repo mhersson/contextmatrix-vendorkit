@@ -1,7 +1,9 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,11 +21,36 @@ func roles(msgs []llm.Message) []string {
 	return r
 }
 
+// requireValidTranscript checks each assistant tool call has exactly one
+// tool message after it and each tool message answers an earlier call.
+func requireValidTranscript(t *testing.T, msgs []llm.Message) {
+	t.Helper()
+
+	open := map[string]int{}
+
+	for _, m := range msgs {
+		switch m.Role {
+		case "assistant":
+			for _, tc := range m.ToolCalls {
+				open[tc.ID]++
+			}
+		case "tool":
+			require.Equal(t, 1, open[m.ToolCallID], "tool message %q answers no open call", m.ToolCallID)
+			open[m.ToolCallID]--
+		}
+	}
+
+	for id, n := range open {
+		require.Zero(t, n, "call %q unanswered", id)
+	}
+}
+
 func TestMessagesFromRun(t *testing.T) {
 	_, res, err := replay(t, "real/t5.jsonl", mapperOpts{Prefix: cmlocal, SystemPrompt: "sys", Task: "q"})
 	require.NoError(t, err)
 
 	require.Equal(t, []string{"system", "user", "assistant", "tool", "assistant"}, roles(res.Messages))
+	requireValidTranscript(t, res.Messages)
 	assert.Equal(t, "sys", res.Messages[0].Content)
 	assert.Equal(t, "q", res.Messages[1].Content)
 
@@ -128,4 +155,36 @@ func TestRenderTranscript(t *testing.T) {
 		assert.Greater(t, i, last, want)
 		last = i
 	}
+}
+
+func TestMessagesUnansweredCall(t *testing.T) {
+	var cut []byte
+
+	for line := range bytes.Lines(readFixture(t, "real/t5.jsonl")) {
+		if bytes.Contains(line, []byte(`"tool_result"`)) {
+			break
+		}
+
+		cut = append(cut, line...)
+	}
+
+	_, res, err := replayData(t, cut, mapperOpts{Prefix: cmlocal, Task: "q"}, errors.New("signal: killed"))
+	require.Error(t, err)
+
+	require.Equal(t, []string{"user", "assistant", "tool"}, roles(res.Messages))
+	assert.Equal(t, "toolu_014h96jCjuHV3wJj8rGfnEn5", res.Messages[2].ToolCallID)
+	assert.Equal(t, res.Messages[1].ToolCalls[0].ID, res.Messages[2].ToolCallID)
+	requireValidTranscript(t, res.Messages)
+}
+
+func TestMessagesIgnoreUnknownResult(t *testing.T) {
+	data := rewrite(readFixture(t, "real/t5.jsonl"), `"tool_use_id":"toolu_014h96jCjuHV3wJj8rGfnEn5"`, `"tool_use_id":"toolu_unknown"`)
+	_, res, err := replayData(t, data, mapperOpts{Prefix: cmlocal}, nil)
+	require.NoError(t, err)
+
+	for _, m := range res.Messages {
+		assert.NotEqual(t, "toolu_unknown", m.ToolCallID)
+	}
+
+	requireValidTranscript(t, res.Messages)
 }

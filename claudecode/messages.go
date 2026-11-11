@@ -89,3 +89,46 @@ func RenderTranscript(msgs []llm.Message) string {
 
 	return strings.TrimSpace(b.String())
 }
+
+// appendToolMessage keeps only the first result of a call this mapper stored;
+// a result for any other id would be an invalid transcript.
+func (m *mapper) appendToolMessage(id, content string) {
+	if answered, known := m.callIDs[id]; !known || answered {
+		return
+	}
+
+	m.callIDs[id] = true
+	m.messages = append(m.messages, llm.Message{Role: "tool", ToolCallID: id, Content: content})
+}
+
+// unansweredResult stands in for a result the stream never delivered.
+const unansweredResult = "The run ended before this tool call returned."
+
+// closedMessages returns the transcript with a synthetic tool message for each
+// call still unanswered, placed after that call's assistant message's results.
+func (m *mapper) closedMessages() []llm.Message {
+	out := make([]llm.Message, 0, len(m.messages))
+
+	for i := 0; i < len(m.messages); i++ {
+		msg := m.messages[i]
+		out = append(out, msg)
+
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+
+		for i+1 < len(m.messages) && m.messages[i+1].Role == "tool" {
+			i++
+
+			out = append(out, m.messages[i])
+		}
+
+		for _, tc := range msg.ToolCalls {
+			if !m.callIDs[tc.ID] {
+				out = append(out, llm.Message{Role: "tool", ToolCallID: tc.ID, Content: m.mask(unansweredResult)})
+			}
+		}
+	}
+
+	return out
+}

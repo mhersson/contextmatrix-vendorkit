@@ -171,6 +171,7 @@ type mapper struct {
 	err     error
 
 	messages []llm.Message
+	callIDs  map[string]bool // tool call ids in appended assistant messages; true once answered
 }
 
 func newMapper(o mapperOpts) *mapper {
@@ -180,6 +181,7 @@ func newMapper(o mapperOpts) *mapper {
 		maskSecret: newMask(o.Secret, nil),
 		closed:     map[string]bool{},
 		streamed:   map[string]tokenBuckets{},
+		callIDs:    map[string]bool{},
 	}
 	m.messages = m.seedMessages()
 
@@ -551,7 +553,7 @@ func (m *mapper) onUser(msg *apiMessage) {
 
 	for _, r := range results {
 		text := toolResultText(r.Content)
-		m.messages = append(m.messages, llm.Message{Role: "tool", ToolCallID: m.maskSecret(r.ToolUseID), Content: m.mask(text)})
+		m.appendToolMessage(m.maskSecret(r.ToolUseID), m.mask(text))
 
 		if r.IsError {
 			m.res.ToolCallFailures++
@@ -619,7 +621,12 @@ func (m *mapper) closeCall() {
 	m.streamedTotal = m.streamedTotal.add(u)
 	m.emitUsage(c.model, u)
 
-	m.messages = append(m.messages, m.assistantMessage(content, c.tools))
+	am := m.assistantMessage(content, c.tools)
+	for _, tc := range am.ToolCalls {
+		m.callIDs[tc.ID] = false
+	}
+
+	m.messages = append(m.messages, am)
 
 	for _, t := range c.tools {
 		m.res.ToolCallCount++
@@ -718,7 +725,7 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 // A Session's stop comes from the Session when its process ends.
 func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
-	m.res.Messages = slices.Clone(m.messages)
+	m.res.Messages = m.closedMessages()
 	m.res.Completed = reason == "done"
 	m.res.ModelUsed = m.maskSecret(m.res.ModelUsed)
 	m.err = m.annotate(reason, err)
