@@ -1194,3 +1194,30 @@ func TestMapperBackstopAfterTerminal(t *testing.T) {
 		})
 	}
 }
+
+// TestMapperBackstopOrdersByStream: the bridge accepts the terminal call
+// before the stream shows it, so the call itself must not trip the backstop.
+func TestMapperBackstopOrdersByStream(t *testing.T) {
+	args := json.RawMessage(finishInput)
+
+	for _, tc := range []struct{ name, fixture string }{
+		{"stream events", "synthetic/partial.jsonl"},
+		{"assistant lines only", "real/t5.jsonl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stopped, evs, res, err := feedUntilStop(t, readFixture(t, tc.fixture), mapperOpts{
+				Prefix:   cmlocal,
+				Task:     "q",
+				Terminal: func() (string, json.RawMessage, bool) { return "finish", args, true },
+			}, errors.New("signal: killed"), nil)
+			require.True(t, stopped, "the call after the terminal one stops the process")
+			require.NoError(t, err)
+
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, 1, res.Turns)
+			assert.Equal(t, []string{"user", "assistant", "tool"}, roles(res.Messages))
+			assert.Len(t, ofKind(evs, events.ToolCallKind), 1)
+			assert.Len(t, ofKind(evs, events.ToolResult), 1)
+		})
+	}
+}

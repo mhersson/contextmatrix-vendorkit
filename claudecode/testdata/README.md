@@ -92,6 +92,11 @@ How they ran (`probe/scripts/`):
   --strict-mcp-config --permission-mode dontAsk --tools <list> --model
   claude-haiku-5-5` (effort runs: `claude-sonnet-5-5`); the user message
   follows the `initialize` gate except in `gate.sh`'s ungated runs.
+- Smoke tests: `smoke.sh`, inside `jail.sh`, runs `TestSmoke*` from a test
+  binary (`go test -c -o <path> ./claudecode`, passed as `SMOKE_TEST`)
+  against `mock.py`'s `smoke` scenario. They drive the real CLI through `Run`
+  with a dummy OAuth token, a dummy API key and the mock's base URL; the tests
+  skip unless `VENDORKIT_SMOKE_CLAUDE` and `VENDORKIT_SMOKE_MOCK` are set.
 
 ## Decisions for 2.1.322
 
@@ -147,3 +152,11 @@ claudecode/testdata/probe/scripts/build-fixtures.py "$SCRATCH"
 claudecode/testdata` (or set `BUILD=1` on the `run-all.sh` run). `real/`
 needs new live recordings with a token, made by the operator. Finish with
 `go test ./claudecode/ -run TestFixturesCarryNoToken`.
+
+The smoke tests run on their own, after `install.sh` (or with `CLAUDE` set):
+
+```bash
+go test -c -o "$SCRATCH/claudecode.test" ./claudecode
+SMOKE_TEST="$SCRATCH/claudecode.test" claudecode/testdata/probe/scripts/jail.sh \
+  claudecode/testdata/probe/scripts/smoke.sh
+```

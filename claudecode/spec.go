@@ -3,6 +3,7 @@ package claudecode
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -80,6 +81,8 @@ func (s Spec) validate(session bool) error {
 		return errors.New("claudecode: Spec.Home is required")
 	case s.Emitter == nil:
 		return errors.New("claudecode: Spec.Emitter is required")
+	case s.Model == "":
+		return errors.New("claudecode: Spec.Model is required")
 	case s.SystemPrompt != "" && s.SystemPromptAppend != "":
 		return errors.New("claudecode: at most one of Spec.SystemPrompt and Spec.SystemPromptAppend may be set")
 	case s.SessionID != "" && s.Resume != "":
@@ -90,11 +93,29 @@ func (s Spec) validate(session bool) error {
 		return errors.New("claudecode: Spec.Task is unused by a Session; send it with Send")
 	}
 
-	for _, m := range s.MCPServers {
-		if m.Name == serverName {
-			return fmt.Errorf("claudecode: Spec.MCPServers entry name %q is reserved for the tool bridge", serverName)
+	// The ID names a transcript file and is matched in a glob.
+	for field, id := range map[string]string{"SessionID": s.SessionID, "Resume": s.Resume} {
+		if id != "" && !sessionIDPattern.MatchString(id) {
+			return fmt.Errorf("claudecode: Spec.%s must hold only letters, digits, '-' and '_'", field)
 		}
+	}
+
+	seen := map[string]bool{}
+
+	for _, m := range s.MCPServers {
+		switch {
+		case m.Name == "":
+			return errors.New("claudecode: Spec.MCPServers entry has no name")
+		case m.Name == serverName:
+			return fmt.Errorf("claudecode: Spec.MCPServers entry name %q is reserved for the tool bridge", serverName)
+		case seen[m.Name]:
+			return fmt.Errorf("claudecode: Spec.MCPServers name %q appears more than once", m.Name)
+		}
+
+		seen[m.Name] = true
 	}
 
 	return nil
 }
+
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)

@@ -281,6 +281,13 @@ func TestSpecValidate(t *testing.T) {
 		{"both prompts", func(s *Spec) { s.SystemPrompt, s.SystemPromptAppend = "a", "b" }, false, "SystemPrompt"},
 		{"session and resume", func(s *Spec) { s.SessionID, s.Resume = "a", "b" }, false, "SessionID"},
 		{"reserved server", func(s *Spec) { s.MCPServers = []mcpbridge.ServerConfig{{Name: "cm"}} }, false, "MCPServers"},
+		{"model", func(s *Spec) { s.Model = "" }, false, "Model"},
+		{"unnamed server", func(s *Spec) { s.MCPServers = []mcpbridge.ServerConfig{{URL: "http://x/mcp"}} }, false, "MCPServers"},
+		{"duplicate server", func(s *Spec) {
+			s.MCPServers = []mcpbridge.ServerConfig{{Name: "contextmatrix"}, {Name: "contextmatrix"}}
+		}, false, "MCPServers"},
+		{"session id path", func(s *Spec) { s.SessionID = "../x" }, false, "SessionID"},
+		{"resume glob", func(s *Spec) { s.Resume = "*" }, false, "Resume"},
 		{"effort", func(s *Spec) { s.Effort = "minimal" }, false, "Effort"},
 		{"effort case", func(s *Spec) { s.Effort = "High" }, false, "Effort"},
 		{"session task", func(s *Spec) {}, true, "Task"},

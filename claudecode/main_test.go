@@ -1,17 +1,17 @@
 package claudecode
 
 import (
-	"fmt"
 	"os"
 	"testing"
+
+	"github.com/mhersson/contextmatrix-vendorkit/internal/fakeclaude"
 )
 
-// TestMain lets the test binary stand in for the claude CLI in CheckVersion
-// tests: with CLAUDECODE_FAKE_VERSION set it prints that version and exits.
+// TestMain lets the test binary stand in for the claude CLI: with
+// fakeclaude.EnvVar set it runs the fake and exits.
 func TestMain(m *testing.M) {
-	if v, ok := os.LookupEnv("CLAUDECODE_FAKE_VERSION"); ok {
-		fmt.Println(v + " (Claude Code)")
-		os.Exit(0)
+	if _, ok := os.LookupEnv(fakeclaude.EnvVar); ok {
+		fakeclaude.Main()
 	}
 
 	os.Exit(m.Run())

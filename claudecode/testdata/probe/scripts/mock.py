@@ -1,11 +1,15 @@
 """Mock Anthropic Messages API for token-free claude -p probes.
 
-Adapted from the prototype's mock-api/mockapi.py.
+Adapted from the prototype's mock-api/mockapi.py; the smoke scenario's finish calls from its mockp3.py.
 
 Usage: mock.py PORT LOG SCENARIO [TOOL_INPUT_JSON [HOLD_FILE]]
   SCENARIO text: every streamed call answers "ok" and ends the turn.
   SCENARIO bash: when the last user turn is not a tool_result, answer one Bash tool_use with
                  TOOL_INPUT_JSON; after a tool_result, answer "done" and end the turn.
+  SCENARIO smoke: for claudecode's smoke tests, by the request's tools. With mcp__cm__finish:
+                 finish {} (refused), then finish with commit_message and summary, then "all done"
+                 (the stop hook should end the run before it). With Bash: one Bash tool_use whose
+                 command writes its PID to bash.pid in the cwd and execs a long sleep.
   HOLD_FILE:     the first streamed answer waits until this file exists.
 Every request is appended to LOG as one JSON line (auth headers, parameters, messages, system
 prompt length, hash and markers); the full system text goes to LOG.system.<n>.txt.
@@ -25,6 +29,9 @@ SCENARIO = sys.argv[3]
 TOOL_INPUT = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 HOLD = sys.argv[5] if len(sys.argv) > 5 else ""
 MAX_TOOL_ANSWERS = 6  # guard against a tool loop when a probe goes wrong
+FINISH = "mcp__cm__finish"
+FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
+SLEEPER = {"command": "sh -c 'echo $$ > bash.pid; exec sleep 300'", "description": "Sleep"}
 MARKERS = ["MARKER-REPLACE-7f3a", "MARKER-APPEND-7f3a"]
 # Unique per mock start: a resumed transcript must not meet message or tool IDs it already holds.
 RUN = format(int(time.time() * 1000) % 0xFFFFFF, "06x")
@@ -43,6 +50,26 @@ def system_text(system):
     if isinstance(system, list):
         return "\n".join(b.get("text", "") for b in system if isinstance(b, dict))
     return ""
+
+
+def tool_results(msgs):
+    return sum(1 for m in msgs if isinstance(m.get("content"), list)
+               for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result")
+
+
+def tool_answer(body, n):
+    """The (name, input) of the tool_use to answer with, or None for text."""
+    msgs = body.get("messages", [])
+    if SCENARIO == "bash":
+        return ("Bash", TOOL_INPUT) if not last_is_tool_result(msgs) and n <= MAX_TOOL_ANSWERS else None
+    if SCENARIO == "smoke":
+        names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
+        done = tool_results(msgs)
+        if FINISH in names and done < len(FINISH_INPUTS):
+            return FINISH, FINISH_INPUTS[done]
+        if "Bash" in names and done == 0:
+            return "Bash", SLEEPER
+    return None
 
 
 def last_is_tool_result(msgs):
@@ -110,7 +137,6 @@ class H(BaseHTTPRequestHandler):
         if "count_tokens" in self.path:
             return self.json({"input_tokens": 10})
         model = body.get("model", "claude-haiku-5-5")
-        msgs = body.get("messages", [])
         usage0 = {"input_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 1}
         if not body.get("stream"):
             return self.json({"id": f"msg_mock{RUN}_{n}", "type": "message", "role": "assistant", "model": model,
@@ -130,14 +156,15 @@ class H(BaseHTTPRequestHandler):
         w(sse("message_start", {"type": "message_start", "message": {
             "id": f"msg_mock{RUN}_{n}", "type": "message", "role": "assistant", "model": model, "content": [],
             "stop_reason": None, "stop_sequence": None, "usage": usage0}}))
-        if SCENARIO == "bash" and not last_is_tool_result(msgs) and n <= MAX_TOOL_ANSWERS:
+        answer = tool_answer(body, n)
+        if answer:
             w(sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {
-                "type": "tool_use", "id": f"toolu_mock{RUN}_{n}", "name": "Bash", "input": {}}}))
+                "type": "tool_use", "id": f"toolu_mock{RUN}_{n}", "name": answer[0], "input": {}}}))
             w(sse("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {
-                "type": "input_json_delta", "partial_json": json.dumps(TOOL_INPUT)}}))
+                "type": "input_json_delta", "partial_json": json.dumps(answer[1])}}))
             stop = "tool_use"
         else:
-            text = "done" if SCENARIO == "bash" else "ok"
+            text = {"bash": "done", "smoke": "all done"}.get(SCENARIO, "ok")
             w(sse("content_block_start", {"type": "content_block_start", "index": 0,
                                           "content_block": {"type": "text", "text": ""}}))
             w(sse("content_block_delta", {"type": "content_block_delta", "index": 0,

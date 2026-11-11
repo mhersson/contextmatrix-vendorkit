@@ -158,12 +158,15 @@ type mapper struct {
 	sawResult bool
 	finished  bool
 
-	halted     bool // a stop condition was seen; later lines are ignored
-	backstop   bool
-	limit      *UsageLimitError
-	authFailed bool
-	bridgeErr  error
-	lastRL     RateLimit
+	halted   bool // a stop condition was seen; later lines are ignored
+	backstop bool
+	// terminalSeen: the stream showed the accepted terminal call's result.
+	terminalSeen bool
+	toolNames    map[string]string // tool_use id to raw name, for closed calls
+	limit        *UsageLimitError
+	authFailed   bool
+	bridgeErr    error
+	lastRL       RateLimit
 
 	sid     string
 	version string // claude_code_version from init
@@ -182,6 +185,7 @@ func newMapper(o mapperOpts) *mapper {
 		closed:     map[string]bool{},
 		streamed:   map[string]tokenBuckets{},
 		callIDs:    map[string]bool{},
+		toolNames:  map[string]string{},
 	}
 	m.messages = m.seedMessages()
 
@@ -388,13 +392,11 @@ func (m *mapper) callFor(id, model string) *apiCall {
 
 	// After an accepted terminal call, a new API call means the model ignored
 	// the end of the run.
-	if !m.o.Session && m.o.Terminal != nil {
-		if _, _, ok := m.o.Terminal(); ok {
-			m.backstop = true
-			m.halted = true
+	if !m.o.Session && m.terminalSeen {
+		m.backstop = true
+		m.halted = true
 
-			return nil
-		}
+		return nil
 	}
 
 	m.calls++
@@ -552,6 +554,10 @@ func (m *mapper) onUser(msg *apiMessage) {
 	m.closeCall()
 
 	for _, r := range results {
+		if !r.IsError {
+			m.noteTerminal(r.ToolUseID)
+		}
+
 		text := toolResultText(r.Content)
 		m.appendToolMessage(m.maskSecret(r.ToolUseID), m.mask(text))
 
@@ -563,6 +569,18 @@ func (m *mapper) onUser(msg *apiMessage) {
 		}
 
 		m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "output_len": len(text)})
+	}
+}
+
+// noteTerminal orders the accepted terminal call by its result in the stream:
+// the bridge accepts the call before the reader may have seen it.
+func (m *mapper) noteTerminal(id string) {
+	if m.terminalSeen || m.o.Terminal == nil {
+		return
+	}
+
+	if tool, _, ok := m.o.Terminal(); ok && m.toolNames[id] == m.o.Prefix+tool {
+		m.terminalSeen = true
 	}
 }
 
@@ -629,6 +647,7 @@ func (m *mapper) closeCall() {
 	m.messages = append(m.messages, am)
 
 	for _, t := range c.tools {
+		m.toolNames[t.id] = t.name
 		m.res.ToolCallCount++
 		m.emit(events.ToolCallKind, map[string]any{"id": t.id, "name": m.toolName(t.name), "raw_args": m.mask(t.args())})
 	}
