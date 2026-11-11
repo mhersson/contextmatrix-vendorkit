@@ -82,12 +82,24 @@ How they ran (`probe/scripts/`):
   PATH=<claude dir>:/usr/bin:/bin HOME=$SCRATCH/home`, cwd an empty scratch
   directory.
 - Mock-API runs: `bash-and-permissions.sh`, `flags.sh`, `gate.sh`,
-  `max-turns.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`, each inside `jail.sh` (a network
-  namespace with only loopback up, so no request can leave the host), against
-  `mock.py`. The child env is `env -i` plus `PATH`, `HOME`,
-  `DISABLE_AUTOUPDATER=1`, `CLAUDE_CONFIG_DIR`, `ANTHROPIC_BASE_URL` and either
-  `ANTHROPIC_API_KEY=dummy-key` or a dummy OAuth token (P6 and the snapshot
-  probe). Flags: `-p --input-format stream-json --output-format stream-json
+  `max-turns.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
+  each inside `jail.sh` (a network namespace with only loopback up, so no
+  request can leave the host), against `mock.py`. The child env is `env -i`
+  plus `PATH`, `HOME`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CONFIG_DIR`,
+  `ANTHROPIC_BASE_URL` and either `ANTHROPIC_API_KEY=dummy-key` or a dummy
+  OAuth token (P6, the snapshot probe and `idle-timeout.sh`). Two scripts
+  differ:
+  - `account.sh` always sets the dummy OAuth token and adds, in every case
+    but the token-only baseline, the dummy API key or one variable probed for
+    moving a run off the subscription (`CLAUDE_CODE_USE_BEDROCK`,
+    `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_SIMPLE`, `ANTHROPIC_UNIX_SOCKET`). Its initialize-only cases
+    leave out `ANTHROPIC_BASE_URL`; only the case that sends a message with
+    both credentials sets it.
+  - `idle-timeout.sh` adds `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` in some cases and
+    passes `--mcp-config` naming `sleepmcp.py` (server `cm`, one tool that
+    answers only after sleeping) with `--allowedTools mcp__cm__sleep`.
+
+  Flags: `-p --input-format stream-json --output-format stream-json
   --verbose --include-partial-messages --setting-sources user
   --strict-mcp-config --permission-mode dontAsk --tools <list> --model
   claude-haiku-5-5` (effort runs: `claude-sonnet-5-5`); the user message
