@@ -21,7 +21,8 @@ allowlist, so the vendor executor lives here.
 ## Package map
 
 - `claudecode` - builds, runs and supervises a headless Claude Code session.
-- `mcpbridge` - exposes ContextMatrix MCP tools to the CLI.
+- `mcpbridge` - serves the backend's tool registry to the CLI on a loopback MCP
+  server, with the stop hook (CM's own MCP server rides `Spec.MCPServers`).
 - `subproc` - child-process supervision shared by vendor adapters.
 - `internal/fakeclaude` - fake CLI binary used by tests.
 

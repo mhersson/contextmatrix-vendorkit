@@ -9,7 +9,9 @@ mode so the backends can run on a Claude subscription.
 
 - `claudecode` - builds and supervises a headless Claude Code run and reports
   it through the caller's `events.Emitter`.
-- `mcpbridge` - exposes ContextMatrix MCP tools to the CLI.
+- `mcpbridge` - serves the backend's `tools.Registry` to the CLI on a loopback
+  MCP server, with the stop hook. ContextMatrix's own MCP server reaches the
+  CLI directly, through `Spec.MCPServers`.
 - `subproc` - child-process supervision shared by vendor adapters.
 
 ## Using claudecode
@@ -30,6 +32,7 @@ untested release proceeds; if it fails, the error names the version that ran.
 builtins, bridged := claudecode.SplitRegistry(reg) // read/write/edit/bash -> built-ins
 res, err := claudecode.Run(ctx, claudecode.Spec{
     Dir: dir, Home: home, OAuthToken: token, Model: model, Task: task,
+    Env: env, // base env for claude and its Bash tool; nil sets no PATH
     BuiltinTools: builtins, Tools: bridged, Emitter: emitter,
     Effort: claudecode.NormalizeEffort(configured),
 })
@@ -62,8 +65,9 @@ Events are the harness kinds, in harness order. The ones that differ:
   calls Claude Code made without streaming them. Always
   `cost_basis: "subscription"`; never `cost_usd` and no notional cost. The
   Result's tokens and `TotalCostUSD` come from the per-model usage
-  (`model_usage_since_last_result`, else `modelUsage`), so a resumed run counts
-  only its own process.
+  `model_usage_since_last_result` (a `Run` whose result lacks it falls back to
+  `modelUsage`; a `Session` turn never does), so a resumed run counts only its
+  own process.
 - `usage_limit` (`window`, `resets_at` when known): emitted before the final
   `state_change` when a usage limit stops the run or session.
 
@@ -92,6 +96,10 @@ Events are the harness kinds, in harness order. The ones that differ:
   start, holding the generated config) and `sessions/` (the transcript store).
   The Claude Code config dir is fresh per process start; a resume restores
   only the stored transcript into it.
+- vendorkit never prunes `sessions/`: retention is the caller's. A `run-*`
+  directory goes when its run or session ends, but a backend crash can leave
+  one behind holding the per-run bridge bearer token and the `Spec.MCPServers`
+  headers (0600 files in a 0700 directory); the caller removes stale ones.
 - The child environment is scrubbed of every variable 2.1.322 reads that
   moves a run off the subscription token: API keys and endpoints, the
   `CLAUDE_CODE_USE_*` provider switches, host-managed provider settings and
