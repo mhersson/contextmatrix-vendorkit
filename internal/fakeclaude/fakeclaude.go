@@ -31,20 +31,28 @@ const EnvVar = "VENDORKIT_FAKE_CLAUDE"
 // sleepArg makes the re-executed binary a grandchild that sleeps until killed.
 const sleepArg = "__fakeclaude_sleep"
 
-// Scenario scripts one fake claude process.
+// Scenario scripts one fake claude process. A user line that arrives before
+// the initialize answer is dropped, as 2.1.322 once dropped a message written
+// at process start.
 type Scenario struct {
 	Version     string // printed for --version
 	Steps       []Step // run in order after reading the first stdin message
 	Replay      string // fixture JSONL written to stdout after the steps
 	Stderr      string // written to stderr before exiting
 	ExitCode    int
-	Hang        bool          // block after replay until killed
+	Hang        bool          // block after the replay or the last turn until killed
 	Grandchild  string        // spawn a sleeping grandchild, write its PID to this path
 	Record      string        // write Recorded JSON here
 	HookOnError bool          // post PostToolUse even for an isError result (future-change guard)
 	Plant       bool          // write settings.json and CLAUDE.md into CLAUDE_CONFIG_DIR, as a hostile Bash command would
 	InitDelay   time.Duration // answer the initialize control_request after this long
 	NoInit      bool          // never answer the initialize control_request
+
+	// Turns replaces Steps and Replay for a long-lived session: one fixture
+	// per user message received. A turn without a result line ends the process.
+	Turns          []string
+	TurnDelay      time.Duration // wait this long before replaying each turn
+	ExitAfterTurns bool          // exit after the last turn instead of waiting for stdin to close
 }
 
 // Step is one bridged tool call the fake makes as if the model had asked.
@@ -58,8 +66,8 @@ type Recorded struct {
 	Args        []string
 	EnvNames    []string          // names only, never values
 	TokenSet    bool              // CLAUDE_CODE_OAUTH_TOKEN was non-empty
-	Stdin       string            // the first stdin user line
-	EarlyInput  bool              // that line arrived before the initialize answer
+	Stdin       string            // the first stdin user line answered
+	EarlyInput  bool              // a user line arrived before the initialize answer and was dropped
 	ConfigDir   string            // CLAUDE_CONFIG_DIR
 	ConfigFiles []string          // paths under CLAUDE_CONFIG_DIR at start, relative, sorted
 	RunFiles    map[string]string // contents of the files --mcp-config, --settings and the prompt flags name, by flag
@@ -193,10 +201,16 @@ func (p *proc) run() int {
 		return fail(err)
 	}
 
-	replay, err := p.loadReplay()
+	if len(p.sc.Turns) > 0 {
+		return p.converse(ctx, first)
+	}
+
+	fixtures, err := p.loadFixtures(p.sc.Replay)
 	if err != nil {
 		return fail(err)
 	}
+
+	replay := fixtures[0]
 
 	if err := p.persist(append([][]byte{first}, replay...)); err != nil {
 		return fail(err)
@@ -225,14 +239,65 @@ func (p *proc) run() int {
 		return 0
 	}
 
-	sawResult := false
-
 	for _, line := range replay {
 		writeLine(line)
-
-		sawResult = sawResult || lineType(line) == "result"
 	}
 
+	return p.exit(hasResult(replay))
+}
+
+// converse replays one Turns fixture per user message, as a long-lived
+// stream-json session answers each message with its own init and result.
+func (p *proc) converse(ctx context.Context, msg []byte) int {
+	turns, err := p.loadFixtures(p.sc.Turns...)
+	if err != nil {
+		return fail(err)
+	}
+
+	if p.sc.Plant {
+		if err := p.plant(); err != nil {
+			return fail(err)
+		}
+	}
+
+	if p.sc.Grandchild != "" {
+		if err := spawnGrandchild(ctx, p.sc.Grandchild); err != nil {
+			return fail(err)
+		}
+	}
+
+	finished := false
+
+	for i, lines := range turns {
+		if i > 0 {
+			var ok bool
+			if msg, ok = p.nextUser(); !ok {
+				return 0
+			}
+		}
+
+		time.Sleep(p.sc.TurnDelay)
+
+		if err := p.persist(append([][]byte{msg}, lines...)); err != nil {
+			return fail(err)
+		}
+
+		for _, line := range lines {
+			writeLine(line)
+		}
+
+		if finished = hasResult(lines); !finished {
+			break
+		}
+	}
+
+	return p.exit(finished && !p.sc.ExitAfterTurns)
+}
+
+// exit writes the scripted stderr and returns the exit code, hanging first
+// when told to. Like the CLI, a finished turn waits for the next message
+// until stdin closes when waitInput is set.
+func (p *proc) exit(waitInput bool) int {
 	_, _ = os.Stderr.WriteString(p.sc.Stderr)
 
 	if p.sc.Hang {
@@ -241,12 +306,15 @@ func (p *proc) run() int {
 		}
 	}
 
-	// Like the CLI, a finished turn waits for the next message until stdin closes.
-	if sawResult {
+	if waitInput {
 		p.drainStdin()
 	}
 
 	return p.sc.ExitCode
+}
+
+func hasResult(lines [][]byte) bool {
+	return slices.ContainsFunc(lines, func(line []byte) bool { return lineType(line) == "result" })
 }
 
 func (p *proc) write(rec Recorded) error {
@@ -329,7 +397,8 @@ func readLines(r io.Reader) <-chan inLine {
 	return ch
 }
 
-// awaitUser answers initialize requests until the first user line arrives.
+// awaitUser answers initialize requests until the first user line arrives
+// after the answer; early reports that an earlier one was dropped.
 func (p *proc) awaitUser() (line []byte, early, ok bool) {
 	var answeredAt time.Time
 
@@ -361,11 +430,28 @@ func (p *proc) awaitUser() (line []byte, early, ok bool) {
 				"response": map[string]any{"pid": os.Getpid(), "claude_code_version": p.sc.Version},
 			}})
 		case msg.Type == "user":
-			return l.data, answeredAt.IsZero() || l.at.Before(answeredAt), true
+			if answeredAt.IsZero() || l.at.Before(answeredAt) {
+				early = true
+
+				continue
+			}
+
+			return l.data, early, true
 		}
 	}
 
-	return nil, false, false
+	return nil, early, false
+}
+
+// nextUser returns the next user line; ok is false once stdin closes.
+func (p *proc) nextUser() ([]byte, bool) {
+	for l := range p.in {
+		if lineType(l.data) == "user" {
+			return l.data, true
+		}
+	}
+
+	return nil, false
 }
 
 func (p *proc) drainStdin() {
@@ -373,27 +459,31 @@ func (p *proc) drainStdin() {
 	}
 }
 
-// loadReplay returns the fixture lines with the fixture's session ID replaced
-// by this process's.
-func (p *proc) loadReplay() ([][]byte, error) {
-	var lines [][]byte
+// loadFixtures returns each fixture's lines (none for an empty path) with the
+// fixtures' session ID replaced by this process's.
+func (p *proc) loadFixtures(paths ...string) ([][][]byte, error) {
+	fixtures := make([][][]byte, len(paths))
 
-	if p.sc.Replay != "" {
-		data, err := os.ReadFile(p.sc.Replay) //nolint:gosec // the test names the fixture
+	for i, path := range paths {
+		if path == "" {
+			continue
+		}
+
+		data, err := os.ReadFile(path) //nolint:gosec // the test names the fixture
 		if err != nil {
-			return nil, fmt.Errorf("read replay: %w", err)
+			return nil, fmt.Errorf("read fixture: %w", err)
 		}
 
 		for line := range bytes.Lines(data) {
 			if line = bytes.TrimSpace(line); len(line) > 0 {
-				lines = append(lines, line)
+				fixtures[i] = append(fixtures[i], line)
 			}
 		}
 	}
 
 	fixtureSID := ""
 
-	for _, line := range lines {
+	for _, line := range slices.Concat(fixtures...) {
 		var l struct {
 			SessionID string `json:"session_id"`
 		}
@@ -408,12 +498,14 @@ func (p *proc) loadReplay() ([][]byte, error) {
 	p.sid = firstSet(p.flags.values["--session-id"], p.flags.values["--resume"], fixtureSID, "fake-session")
 
 	if fixtureSID != "" && fixtureSID != p.sid {
-		for i, line := range lines {
-			lines[i] = bytes.ReplaceAll(line, []byte(fixtureSID), []byte(p.sid))
+		for _, lines := range fixtures {
+			for i, line := range lines {
+				lines[i] = bytes.ReplaceAll(line, []byte(fixtureSID), []byte(p.sid))
+			}
 		}
 	}
 
-	return lines, nil
+	return fixtures, nil
 }
 
 func firstSet(vals ...string) string {

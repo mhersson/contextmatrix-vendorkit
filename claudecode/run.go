@@ -70,55 +70,98 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 		return failed(err)
 	}
 
-	rd, err := newRunDir(spec.Home)
+	l, err := launch(ctx, spec, false, o.extraEnv)
 	if err != nil {
 		return failed(err)
 	}
 
 	defer func() {
-		if rerr := os.RemoveAll(rd.dir); rerr != nil {
-			err = errors.Join(err, maskErr(mask, fmt.Errorf("claudecode: remove run dir: %w", rerr)))
+		if rerr := l.release(mask); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+	}()
+
+	m := newMapper(mapperOpts{
+		Emitter: spec.Emitter, Redact: spec.Redact, Secret: spec.OAuthToken,
+		OnDelta: spec.OnDelta, OnRateLimit: spec.OnRateLimit,
+		Prefix: bridgePrefix, Terminal: l.terminal,
+		SystemPrompt: spec.SystemPrompt, Task: spec.Task, TaskImages: spec.TaskImages,
+	})
+
+	procErr := supervise(ctx, l.p, m, task, o)
+
+	var storeErr error
+	if spec.SessionID != "" || spec.Resume != "" {
+		storeErr = storeTranscripts(spec.Home, l.rd.config, spec.OAuthToken)
+	}
+
+	res, err = m.finish(procErr)
+	err = withStderr(err, res.Reason, stderrDetail(l.p.StderrTail(), spec.OAuthToken, mask))
+
+	if storeErr != nil {
+		err = errors.Join(err, maskErr(mask, storeErr))
+	}
+
+	return res, err
+}
+
+// bridgePrefix is what the bridge's tool names carry in the stream.
+const bridgePrefix = "mcp__" + serverName + "__"
+
+// launched is one started claude process and the run dir and bridge it owns.
+type launched struct {
+	rd       runDir
+	bridge   *mcpbridge.Bridge // nil without Spec.Tools
+	terminal func() (string, json.RawMessage, bool)
+	p        *subproc.Proc
+}
+
+// launch prepares the run dir, the Resume transcript, the bridge and the run
+// files, then starts claude. Bridged tool calls run under ctx. On error it
+// releases whatever it created; the caller masks the returned error.
+func launch(ctx context.Context, spec Spec, session bool, extraEnv []string) (_ *launched, err error) {
+	rd, err := newRunDir(spec.Home)
+	if err != nil {
+		return nil, err
+	}
+
+	l := &launched{rd: rd}
+
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, l.release(func(s string) string { return s }))
 		}
 	}()
 
 	if spec.Resume != "" {
 		if err := restoreTranscript(spec.Home, spec.Resume, rd.config); err != nil {
-			return failed(err)
+			return nil, err
 		}
 	}
 
-	var (
-		bi       bridgeInfo
-		terminal func() (string, json.RawMessage, bool)
-	)
+	var bi bridgeInfo
 
 	if spec.Tools != nil {
-		bridge, berr := mcpbridge.Start(ctx, serverName, spec.Tools)
-		if berr != nil {
-			return failed(berr)
+		bridge, err := mcpbridge.Start(ctx, serverName, spec.Tools)
+		if err != nil {
+			return nil, err
 		}
 
-		defer func() {
-			if cerr := bridge.Close(); cerr != nil {
-				err = errors.Join(err, maskErr(mask, cerr))
-			}
-		}()
-
+		l.bridge, l.terminal = bridge, bridge.Terminal
 		bi = bridgeInfo{
 			Server: bridge.Config(), HookURL: bridge.HookURL(),
 			Tools: qualify(bridge, bridge.Tools()), Terminals: qualify(bridge, bridge.Terminals()),
 		}
-		terminal = bridge.Terminal
 	}
 
-	args, files, err := buildInvocation(spec, bi, rd.dir, false)
+	args, files, err := buildInvocation(spec, bi, rd.dir, session)
 	if err != nil {
-		return failed(err)
+		return nil, err
 	}
 
 	for path, data := range files {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return failed(fmt.Errorf("claudecode: write run file: %w", err))
+			return nil, fmt.Errorf("claudecode: write run file: %w", err)
 		}
 	}
 
@@ -127,36 +170,32 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 		binary = "claude"
 	}
 
-	p, err := subproc.Start(subproc.Cmd{
+	l.p, err = subproc.Start(subproc.Cmd{
 		Path: binary, Args: args, Dir: spec.Dir,
-		Env: append(childEnv(spec, rd.config), o.extraEnv...),
+		Env: append(childEnv(spec, rd.config), extraEnv...),
 	})
 	if err != nil {
-		return failed(fmt.Errorf("claudecode: %w", err))
+		return nil, fmt.Errorf("claudecode: %w", err)
 	}
 
-	m := newMapper(mapperOpts{
-		Emitter: spec.Emitter, Redact: spec.Redact, Secret: spec.OAuthToken,
-		OnDelta: spec.OnDelta, OnRateLimit: spec.OnRateLimit,
-		Prefix: "mcp__" + serverName + "__", Terminal: terminal,
-		SystemPrompt: spec.SystemPrompt, Task: spec.Task, TaskImages: spec.TaskImages,
-	})
+	return l, nil
+}
 
-	procErr := supervise(ctx, p, m, task, o)
+// release closes the bridge and removes the run dir, masking any error.
+func (l *launched) release(mask func(string) string) error {
+	var errs []error
 
-	var storeErr error
-	if spec.SessionID != "" || spec.Resume != "" {
-		storeErr = storeTranscripts(spec.Home, rd.config, spec.OAuthToken)
+	if l.bridge != nil {
+		if err := l.bridge.Close(); err != nil {
+			errs = append(errs, maskErr(mask, err))
+		}
 	}
 
-	res, err = m.finish(procErr)
-	err = withStderr(err, res.Reason, stderrDetail(p.StderrTail(), spec.OAuthToken, mask))
-
-	if storeErr != nil {
-		err = errors.Join(err, maskErr(mask, storeErr))
+	if err := os.RemoveAll(l.rd.dir); err != nil {
+		errs = append(errs, maskErr(mask, fmt.Errorf("claudecode: remove run dir: %w", err)))
 	}
 
-	return res, err
+	return errors.Join(errs...)
 }
 
 // supervise passes the initialize gate, writes the task, feeds stdout to m and
