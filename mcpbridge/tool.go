@@ -16,13 +16,8 @@ const postTerminalResult = "unexecuted: an earlier call in this batch ended the 
 
 var emptyObjectSchema = json.RawMessage(`{"type":"object"}`)
 
-func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.Tool) {
+func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.Tool, schema json.RawMessage) {
 	fn := t.Schema().Function
-
-	schema := fn.Parameters
-	if len(schema) == 0 {
-		schema = emptyObjectSchema
-	}
 
 	term, isTerm := t.(tools.Terminal)
 	terminal := isTerm && term.Terminal()
@@ -46,8 +41,14 @@ func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.To
 				}
 			}
 
-			if terminal && b.terminalDone() {
-				return errorResult(postTerminalResult), nil
+			if terminal {
+				// Held through Execute and record so only one terminal call runs.
+				b.termExec.Lock()
+				defer b.termExec.Unlock()
+
+				if b.terminalDone() {
+					return errorResult(postTerminalResult), nil
+				}
 			}
 
 			res, err := t.Execute(ctx, args)
@@ -55,12 +56,35 @@ func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.To
 				return errorResult(err.Error()), nil
 			}
 
-			if terminal && !b.recordTerminal(t.Name(), raw) {
-				return errorResult(postTerminalResult), nil
+			if terminal {
+				b.recordTerminal(t.Name(), raw)
 			}
 
 			return toResult(res), nil
 		})
+}
+
+// inputSchema returns the schema go-sdk will accept: empty, null and {} become
+// an empty object schema; anything else must already declare type "object".
+func inputSchema(t tools.Tool) (json.RawMessage, error) {
+	raw := t.Schema().Function.Parameters
+
+	var m map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, fmt.Errorf("mcpbridge tool %q: invalid input schema: %w", t.Name(), err)
+		}
+	}
+
+	if len(m) == 0 {
+		return emptyObjectSchema, nil
+	}
+
+	if m["type"] != "object" {
+		return nil, fmt.Errorf("mcpbridge tool %q: input schema must have type object", t.Name())
+	}
+
+	return raw, nil
 }
 
 func errorResult(text string) *mcp.CallToolResult {

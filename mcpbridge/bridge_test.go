@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,4 +350,96 @@ func TestBridgeToolContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("tool ctx not cancelled by Start ctx")
 	}
+}
+
+func TestStartSchemaHandling(t *testing.T) {
+	mk := func(name, params string) *tools.Registry {
+		return tools.NewRegistry(fixture{
+			name: name, params: params,
+			exec: func(context.Context, map[string]any) (tools.Result, error) { return tools.Result{}, nil },
+		})
+	}
+
+	for _, p := range []string{``, `null`, `{}`} {
+		b, err := Start(t.Context(), "cm", mk("t", p))
+		require.NoError(t, err, p)
+		require.NoError(t, b.Close())
+	}
+
+	for _, p := range []string{`{"anyOf":[{"type":"object"}]}`, `{"properties":{}}`, `{"type":"string"}`, `[1]`, `{bad`} {
+		b, err := Start(t.Context(), "cm", mk("badtool", p))
+		require.Error(t, err, p)
+		assert.Nil(t, b)
+		assert.Contains(t, err.Error(), "badtool")
+	}
+}
+
+func TestBridgeConcurrentTerminalCalls(t *testing.T) {
+	var (
+		execs   atomic.Int32
+		started = make(chan struct{}, 2)
+		release = make(chan struct{})
+	)
+
+	reg := tools.NewRegistry(terminalFixture{fixture{
+		name: "finish", params: `{"type":"object"}`,
+		exec: func(_ context.Context, a map[string]any) (tools.Result, error) {
+			execs.Add(1)
+
+			started <- struct{}{}
+
+			<-release
+
+			return tools.Result{Text: "ok"}, nil
+		},
+	}})
+	b := startBridge(t, reg)
+	sess := connect(t, b)
+
+	type outcome struct {
+		res *mcp.CallToolResult
+		err error
+	}
+
+	results := make(chan outcome, 2)
+	fire := func(msg string) {
+		res, err := sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "finish", Arguments: map[string]any{"m": msg}})
+		results <- outcome{res, err}
+	}
+
+	go fire("a")
+
+	<-started
+
+	go fire("b")
+
+	// The second call must be parked behind the first, not executing.
+	select {
+	case <-started:
+		t.Fatal("second terminal call executed concurrently")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+
+	var okCount, errCount int
+
+	for range 2 {
+		o := <-results
+		require.NoError(t, o.err)
+
+		if o.res.IsError {
+			errCount++
+		} else {
+			okCount++
+		}
+	}
+
+	assert.Equal(t, 1, okCount)
+	assert.Equal(t, 1, errCount)
+	assert.Equal(t, int32(1), execs.Load())
+
+	_, args, ok := b.Terminal()
+	require.True(t, ok)
+	assert.JSONEq(t, `{"m":"a"}`, string(args))
 }

@@ -28,22 +28,16 @@ func (b *Bridge) terminalDone() bool {
 	return b.termDone
 }
 
-// recordTerminal stores the first accepted terminal call; it reports false when
-// one was already recorded.
-func (b *Bridge) recordTerminal(tool string, args json.RawMessage) bool {
+// recordTerminal stores the accepted terminal call. Callers hold termExec, so
+// at most one call is ever recorded.
+func (b *Bridge) recordTerminal(tool string, args json.RawMessage) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if b.termDone {
-		return false
-	}
 
 	b.termDone = true
 	b.termTool = tool
 
 	b.termArgs = append([]byte(nil), args...)
-
-	return true
 }
 
 func (b *Bridge) handleHook(w http.ResponseWriter, r *http.Request) {

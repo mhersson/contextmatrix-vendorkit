@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -40,6 +41,7 @@ type Bridge struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	termExec sync.Mutex
 	mu       sync.Mutex
 	termTool string
 	termArgs []byte
@@ -49,6 +51,19 @@ type Bridge struct {
 // Start listens on 127.0.0.1 and serves reg's tools until Close. Tool calls run
 // with a context derived from ctx. reg may be nil.
 func Start(ctx context.Context, name string, reg *tools.Registry) (*Bridge, error) {
+	schemas := map[string]json.RawMessage{}
+
+	if reg != nil {
+		for _, t := range reg.All() {
+			schema, err := inputSchema(t)
+			if err != nil {
+				return nil, err
+			}
+
+			schemas[t.Name()] = schema
+		}
+	}
+
 	bearer, err := secret()
 	if err != nil {
 		return nil, err
@@ -86,7 +101,7 @@ func Start(ctx context.Context, name string, reg *tools.Registry) (*Bridge, erro
 				b.terminals = append(b.terminals, t.Name())
 			}
 
-			b.register(runCtx, server, t)
+			b.register(runCtx, server, t, schemas[t.Name()])
 		}
 	}
 
