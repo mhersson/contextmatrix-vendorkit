@@ -188,3 +188,22 @@ func TestMessagesIgnoreUnknownResult(t *testing.T) {
 
 	requireValidTranscript(t, res.Messages)
 }
+
+func TestMessagesSkipEmptyAssistant(t *testing.T) {
+	data := rewrite(readFixture(t, "real/t1.jsonl"),
+		`"content":[{"type":"text","text":"ok"}]`,
+		`"content":[{"type":"thinking","thinking":"hmm"}]`)
+	require.NotEqual(t, readFixture(t, "real/t1.jsonl"), data)
+
+	_, res, err := replayData(t, data, mapperOpts{Task: "q"}, nil)
+	require.NoError(t, err)
+
+	for _, msg := range res.Messages {
+		if msg.Role == "assistant" {
+			assert.False(t, msg.Content == "" && len(msg.ToolCalls) == 0, "empty assistant message kept: %+v", msg)
+		}
+	}
+
+	require.NotEmpty(t, res.Messages)
+	assert.Equal(t, "user", res.Messages[0].Role)
+}
