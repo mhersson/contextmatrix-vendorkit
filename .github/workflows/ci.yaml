@@ -1,0 +1,146 @@
+# CI pipeline for contextmatrix-vendorkit.
+#
+# Gates every pull_request on the full quality bar. Pushes to main skip the
+# checks (already validated on the PR) - branch protection requires the check
+# jobs to pass before merge.
+#
+# GitHub Actions are pinned to exact release tags; Dependabot
+# (.github/dependabot.yml) keeps them current.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test
+        run: make test
+
+      - name: go test -race
+        run: make test-race
+
+  lint:
+    name: lint
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Install golangci-lint at the version the Makefile pins, so CI and a
+      # local `make lint` use the same release.
+      - name: Install golangci-lint
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^GOLANGCI_LINT_VERSION' Makefile | head -1 | awk '{print $NF}')
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${VERSION}"
+
+      - name: golangci-lint
+        run: make lint
+
+  build:
+    name: build
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: make build
+
+  deps-gate:
+    name: deps-gate
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Boundary gate
+        run: make deps-gate
+
+  govulncheck:
+    name: govulncheck
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: |
+          VERSION=$(grep '^GOVULNCHECK_VERSION' Makefile | head -1 | awk '{print $NF}')
+          go install "golang.org/x/vuln/cmd/govulncheck@${VERSION}"
+
+      # Fails only on symbol-level findings (this code calls the vulnerable
+      # symbol) that also have an upstream fix. Module- and package-level
+      # findings without a callable trace do not block. A JSON stream with no
+      # config message means the scan never ran, so the step fails closed.
+      - name: Run govulncheck (fail only on callable, fixable findings)
+        run: |
+          set -euo pipefail
+          govulncheck -format=json ./... > /tmp/vuln.json || true
+
+          if ! jq -s -e 'any(.[]; .config != null)' /tmp/vuln.json > /dev/null; then
+            echo "::error::govulncheck emitted no config message; the scan did not run."
+            exit 1
+          fi
+
+          FIXABLE=$(jq -s '[.[] | select(.finding != null
+                                          and (.finding.fixed_version // "") != ""
+                                          and (.finding.trace | any((.function // "") != "")))] | length' /tmp/vuln.json)
+
+          echo "callable + fixable findings: ${FIXABLE}"
+
+          govulncheck ./... || true
+
+          if [ "${FIXABLE}" -gt 0 ]; then
+            echo "::error::Callable, fixable vulnerabilities detected. See output above."
+            exit 1
+          fi
+
+          echo "No callable, fixable vulnerabilities. Remaining findings are uncalled by this code or have no upstream fix."
