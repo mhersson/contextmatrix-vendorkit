@@ -101,7 +101,12 @@ func errorResult(text string) *mcp.CallToolResult {
 }
 
 func toResult(res tools.Result) *mcp.CallToolResult {
-	out := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: res.Text}}}
+	out := &mcp.CallToolResult{}
+	// An empty text block beside images is rejected by the Messages API; with
+	// no images it stays, so the result is never empty.
+	if res.Text != "" || len(res.Images) == 0 {
+		out.Content = append(out.Content, &mcp.TextContent{Text: res.Text})
+	}
 
 	for _, img := range res.Images {
 		mime, data, ok := parseDataURL(img.URL)
