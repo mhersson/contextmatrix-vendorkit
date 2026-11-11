@@ -695,11 +695,25 @@ func (m *mapper) onResult(l streamLine) {
 		}
 	}
 
+	// Tokens come from the cost's source, so the usage events add up to them;
+	// result.usage can leave out calls another model served.
+	tokens := tokenBuckets{
+		deref(l.Usage.InputTokens), deref(l.Usage.OutputTokens),
+		deref(l.Usage.CacheReadInputTokens), deref(l.Usage.CacheCreationInputTokens),
+	}
+
+	if len(perModel) > 0 {
+		tokens = tokenBuckets{}
+		for _, u := range perModel {
+			tokens = tokens.add(tokenBuckets{u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens})
+		}
+	}
+
 	m.res.Turns = l.NumTurns
-	m.res.PromptTokens = deref(l.Usage.InputTokens)
-	m.res.CompletionTokens = deref(l.Usage.OutputTokens)
-	m.res.CacheReadTokens = deref(l.Usage.CacheReadInputTokens)
-	m.res.CacheCreationTokens = deref(l.Usage.CacheCreationInputTokens)
+	m.res.PromptTokens = tokens.prompt
+	m.res.CompletionTokens = tokens.completion
+	m.res.CacheReadTokens = tokens.cacheRead
+	m.res.CacheCreationTokens = tokens.cacheCreation
 	m.res.Output = m.mask(l.Result)
 
 	reason, err := m.outcome(l)

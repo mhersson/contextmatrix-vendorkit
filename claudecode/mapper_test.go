@@ -395,7 +395,19 @@ func TestMapperResumedRunCountsOnlyThisProcess(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, buckets{40, 20, 0, 0}, sumUsage(t, evs), "remainder from modelUsage")
+		assert.Equal(t, sumUsage(t, evs), resultBuckets(res), "tokens from the same source as the cost")
 		assert.InDelta(t, 1.4e-05, res.TotalCostUSD, 1e-12, "total_cost_usd")
+	})
+
+	t.Run("fallback without per-model usage", func(t *testing.T) {
+		data := readFixture(t, "real/t1.jsonl")
+		data = dropResultKey(t, dropResultKey(t, data, "model_usage_since_last_result"), "modelUsage")
+
+		evs, res, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__"}, nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, buckets{2, 4, 11382, 6379}, resultBuckets(res), "result.usage")
+		assert.Equal(t, resultBuckets(res), sumUsage(t, evs))
 	})
 }
 
@@ -422,6 +434,11 @@ func TestMapperRemainderPerModel(t *testing.T) {
 	assert.Equal(t, buckets{350, 12, 0, 0}, usageOf(t, haiku[0]))
 	assert.Equal(t, buckets{4, 125, 3844, 3977}, sonnet)
 	assert.InDelta(t, 0.0175914, res.TotalCostUSD, 1e-12)
+
+	// result.usage (4/125/3844/3977) leaves out the haiku call; the per-model
+	// sums, the cost's source, include it.
+	assert.Equal(t, buckets{354, 137, 3844, 3977}, resultBuckets(res))
+	assert.Equal(t, resultBuckets(res), sumUsage(t, evs))
 	assert.Equal(t, "claude-sonnet-5-5", res.ModelUsed)
 }
 
