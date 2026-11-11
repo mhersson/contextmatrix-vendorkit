@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mhersson/contextmatrix-vendorkit/internal/fakeclaude"
+	"github.com/mhersson/contextmatrix-vendorkit/subproc"
 )
 
 const fakeToken = "test-oauth-token"
@@ -281,12 +282,17 @@ func TestRunTerminalStops(t *testing.T) {
 	})
 	f.spec.Tools = testTools()
 
-	res, err := Run(t.Context(), f.spec)
+	stream := &streamLog{}
+
+	res, err := run(t.Context(), f.spec, runOpts{gateTimeout: gateTimeout, grace: stopGrace, onLine: stream.add})
 	require.NoError(t, err)
 
 	assert.True(t, res.Completed)
 	assert.Equal(t, "done", res.Reason)
 	assert.JSONEq(t, `{"commit_message":"c","summary":"s"}`, string(res.CompletionArgs))
+
+	// The stop hook ended the run, not the post-terminal backstop.
+	assert.Equal(t, "hook_stopped", stream.last(t, "result", "")["terminal_reason"])
 
 	// The replay would have added its own call and the output "ok".
 	assert.Empty(t, res.Output)
@@ -618,10 +624,73 @@ func TestRunResumeCarriesOnlyTranscript(t *testing.T) {
 func TestStderrDetailDropsCutToken(t *testing.T) {
 	mask := newMask(fakeToken, nil)
 
-	got := stderrDetail(fakeToken[5:]+" trailing\nnext "+fakeToken+"\n", fakeToken, mask)
-	assert.NotContains(t, got, fakeToken[5:])
+	// A full tail was cut at the cap and can open with the token's end.
+	body := " trailing\nnext " + fakeToken + "\n"
+	cut := fakeToken[5:] + strings.Repeat("x", subproc.StderrTailSize-len(fakeToken[5:])-len(body)) + body
+	require.Len(t, cut, subproc.StderrTailSize)
+
+	got := stderrDetail(cut, fakeToken, mask)
+	assert.False(t, strings.HasPrefix(got, fakeToken[5:]), "the cut token's end survived")
+	assert.NotContains(t, got, fakeToken)
 	assert.Contains(t, got, "trailing")
 	assert.Contains(t, got, "next")
 
-	assert.Equal(t, "plain", stderrDetail("plain\n", fakeToken, mask))
+	// A tail below the cap is the whole stderr: its first byte stays even when
+	// it matches the token's last one.
+	last := fakeToken[len(fakeToken)-1:]
+	assert.Equal(t, last+"o such file", stderrDetail(last+"o such file\n", fakeToken, mask))
+}
+
+func TestCancelCause(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.Equal(t, context.Canceled, cancelCause(ctx), "no cause beyond the cancel itself")
+
+	cause := errors.New("cost cap")
+	ctx, cancelCause2 := context.WithCancelCause(t.Context())
+	cancelCause2(cause)
+
+	err := cancelCause(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, cause)
+}
+
+// badSchema runs fn when the bridge reads its schema, inside Run before the
+// process starts, and then fails the bridge start with a non-object schema.
+type badSchema struct {
+	stubTool
+	fn func()
+}
+
+func (s badSchema) Schema() llm.Tool {
+	s.fn()
+
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: s.name, Parameters: json.RawMessage(`{"type":"string"}`)}}
+}
+
+func TestRunCanceledBeforeStart(t *testing.T) {
+	for _, during := range []bool{false, true} {
+		t.Run(fmt.Sprintf("during setup %v", during), func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(t.Context())
+			defer cancel(nil)
+
+			cause := errors.New("cost cap")
+			f := newFakeRun(t, fakeclaude.Scenario{Replay: fixture(t, "real/t1.jsonl")})
+			f.spec.Tools = tools.NewRegistry(badSchema{stubTool{name: "echo"}, func() {
+				if during {
+					cancel(cause)
+				}
+			}})
+
+			if !during {
+				cancel(cause)
+			}
+
+			res, err := Run(ctx, f.spec)
+			require.ErrorIs(t, err, cause)
+			assert.Equal(t, "canceled", res.Reason)
+			assert.NoFileExists(t, f.record, "the process started")
+			requireNoRunDirs(t, f.spec.Home)
+		})
+	}
 }

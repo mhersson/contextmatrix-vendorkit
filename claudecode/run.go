@@ -37,17 +37,28 @@ type runOpts struct {
 
 // Run executes one unit of work (an agent phase, an architect stage, a mob or
 // review seat) as one `claude -p` process and returns a harness-shaped result.
-// It returns the usage and messages it observed even when err != nil.
+// It returns the usage and messages it observed even when err != nil. A cancel
+// that arrives after the result line keeps that result's outcome, as in
+// harness.Run.
 func Run(ctx context.Context, spec Spec) (harness.Result, error) {
 	return run(ctx, spec, runOpts{gateTimeout: gateTimeout, grace: stopGrace})
 }
 
 func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err error) {
 	mask := newMask(spec.OAuthToken, spec.Redact)
-	failed := harness.Result{Reason: "error"}
+
+	// failed reports a failure before the process starts; once ctx is done the
+	// cancel is the outcome, whatever setup step it broke.
+	failed := func(err error) (harness.Result, error) {
+		if ctx.Err() != nil {
+			return harness.Result{Reason: "canceled"}, maskErr(mask, fmt.Errorf("claudecode: run canceled: %w: %w", cancelCause(ctx), err))
+		}
+
+		return harness.Result{Reason: "error"}, maskErr(mask, err)
+	}
 
 	if err := spec.validate(false); err != nil {
-		return failed, maskErr(mask, err)
+		return failed(err)
 	}
 
 	if ctx.Err() != nil {
@@ -56,12 +67,12 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 
 	task, err := userMessage(spec.Task, spec.TaskImages)
 	if err != nil {
-		return failed, maskErr(mask, err)
+		return failed(err)
 	}
 
 	rd, err := newRunDir(spec.Home)
 	if err != nil {
-		return failed, maskErr(mask, err)
+		return failed(err)
 	}
 
 	defer func() {
@@ -72,7 +83,7 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 
 	if spec.Resume != "" {
 		if err := restoreTranscript(spec.Home, spec.Resume, rd.config); err != nil {
-			return failed, maskErr(mask, err)
+			return failed(err)
 		}
 	}
 
@@ -84,7 +95,7 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 	if spec.Tools != nil {
 		bridge, berr := mcpbridge.Start(ctx, serverName, spec.Tools)
 		if berr != nil {
-			return failed, maskErr(mask, berr)
+			return failed(berr)
 		}
 
 		defer func() {
@@ -102,12 +113,12 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 
 	args, files, err := buildInvocation(spec, bi, rd.dir, false)
 	if err != nil {
-		return failed, maskErr(mask, err)
+		return failed(err)
 	}
 
 	for path, data := range files {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return failed, maskErr(mask, fmt.Errorf("claudecode: write run file: %w", err))
+			return failed(fmt.Errorf("claudecode: write run file: %w", err))
 		}
 	}
 
@@ -121,7 +132,7 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 		Env: append(childEnv(spec, rd.config), o.extraEnv...),
 	})
 	if err != nil {
-		return failed, maskErr(mask, fmt.Errorf("claudecode: %w", err))
+		return failed(fmt.Errorf("claudecode: %w", err))
 	}
 
 	m := newMapper(mapperOpts{
@@ -240,7 +251,12 @@ func settle(ctx context.Context, p *subproc.Proc, grace time.Duration, graceful 
 
 // cancelCause keeps the caller's cause (the architect's cost cap) matchable.
 func cancelCause(ctx context.Context) error {
-	return fmt.Errorf("%w: %w", ctx.Err(), context.Cause(ctx))
+	// With no cause given, Cause returns ctx.Err() itself.
+	if cause := context.Cause(ctx); cause != ctx.Err() {
+		return fmt.Errorf("%w: %w", ctx.Err(), cause)
+	}
+
+	return ctx.Err()
 }
 
 func initRequest(id string) []byte {
@@ -291,10 +307,11 @@ func withStderr(err error, reason, detail string) error {
 	return &maskedError{text: err.Error() + "; stderr: " + detail, err: err}
 }
 
-// stderrDetail is the stderr tail as an error carries it. The tail is cut at a
-// byte count, so it can open with the end of the token; that end goes too.
+// stderrDetail is the stderr tail as an error carries it. A tail at the cap
+// was cut at a byte count, so it can open with the end of the token; that end
+// goes too.
 func stderrDetail(tail, secret string, mask func(string) string) string {
-	for n := len(secret) - 1; n > 0; n-- {
+	for n := len(secret) - 1; n > 0 && len(tail) >= subproc.StderrTailSize; n-- {
 		if strings.HasPrefix(tail, secret[len(secret)-n:]) {
 			tail = tail[n:]
 

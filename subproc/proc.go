@@ -18,7 +18,8 @@ import (
 // MaxLine is the default cap on one stdout line.
 const MaxLine = 64 << 20
 
-const stderrTailSize = 16 << 10
+// StderrTailSize caps StderrTail; a tail this long may have lost its start.
+const StderrTailSize = 16 << 10
 
 // Cmd describes the process to run.
 type Cmd struct {
@@ -150,7 +151,7 @@ func (p *Proc) Stdin() io.WriteCloser { return p.stdin }
 // stdout EOF or on a read error.
 func (p *Proc) Lines() <-chan []byte { return p.lines }
 
-// StderrTail returns the last 16 KiB of stderr.
+// StderrTail returns the last StderrTailSize bytes of stderr.
 func (p *Proc) StderrTail() string { return p.tail.String() }
 
 // Stop sends SIGTERM to the process group and SIGKILL after grace, to the
@@ -299,7 +300,7 @@ func (b *tailBuffer) Write(data []byte) (int, error) {
 	defer b.mu.Unlock()
 
 	b.buf = append(b.buf, data...)
-	if over := len(b.buf) - stderrTailSize; over > 0 {
+	if over := len(b.buf) - StderrTailSize; over > 0 {
 		b.buf = append(b.buf[:0], b.buf[over:]...)
 	}
 
