@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	github.com/mhersson/contextmatrix-harness v0.29.0
+	github.com/mhersson/contextmatrix-protocol v0.41.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/stretchr/testify v1.12.1
 )
