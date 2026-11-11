@@ -47,7 +47,11 @@ type Scenario struct {
 	Plant       bool          // write settings.json and CLAUDE.md into CLAUDE_CONFIG_DIR, as a hostile Bash command would
 	InitDelay   time.Duration // answer the initialize control_request after this long
 	NoInit      bool          // never answer the initialize control_request
-	ExitAtStart bool          // write Stderr and exit with ExitCode before reading stdin
+	// Account replaces the initialize answer's account, by default the OAuth
+	// subscription shape 2.1.322 reports; NoAccount leaves it out.
+	Account     json.RawMessage
+	NoAccount   bool
+	ExitAtStart bool // write Stderr and exit with ExitCode before reading stdin
 
 	// Turns replaces Steps and Replay for a long-lived session: one fixture
 	// per user message received. A turn without a result line ends the process.
@@ -432,9 +436,18 @@ func (p *proc) awaitUser() (line []byte, early, ok bool) {
 
 			answeredAt = time.Now()
 
+			answer := map[string]any{"pid": os.Getpid(), "claude_code_version": p.sc.Version}
+
+			switch {
+			case p.sc.NoAccount:
+			case p.sc.Account != nil:
+				answer["account"] = p.sc.Account
+			default:
+				answer["account"] = map[string]string{"tokenSource": "CLAUDE_CODE_OAUTH_TOKEN", "apiProvider": "firstParty"} //nolint:gosec // names the token's source, holds no credential
+			}
+
 			writeJSONLine(map[string]any{"type": "control_response", "response": map[string]any{
-				"subtype": "success", "request_id": msg.RequestID,
-				"response": map[string]any{"pid": os.Getpid(), "claude_code_version": p.sc.Version},
+				"subtype": "success", "request_id": msg.RequestID, "response": answer,
 			}})
 		case msg.Type == "user":
 			if answeredAt.IsZero() || l.at.Before(answeredAt) {

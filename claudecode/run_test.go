@@ -492,6 +492,56 @@ func TestRunInitializeTimeout(t *testing.T) {
 	requireNoRunDirs(t, f.spec.Home)
 }
 
+// foreignAccounts are initialize answers whose run would not bill the
+// subscription token: 2.1.322's shapes under a provider switch, an API key
+// alone and an API key beside the token.
+var foreignAccounts = map[string]string{
+	"provider switch": `{"apiProvider":"bedrock"}`,
+	"api key only":    `{"tokenSource":"none","apiKeySource":"ANTHROPIC_API_KEY","apiProvider":"firstParty"}`,
+	"api key wins":    `{"tokenSource":"CLAUDE_CODE_OAUTH_TOKEN","apiKeySource":"ANTHROPIC_API_KEY","apiProvider":"firstParty"}`,
+	"no token":        `{"tokenSource":"none","apiProvider":"firstParty"}`,
+}
+
+func TestRunFailsClosedOnForeignAccount(t *testing.T) {
+	for name, acct := range foreignAccounts {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeRun(t, fakeclaude.Scenario{Replay: fixture(t, "real/t1.jsonl"), Account: json.RawMessage(acct)})
+
+			res, err := Run(boundCtx(t), f.spec)
+
+			require.ErrorIs(t, err, errNotSubscription)
+			assert.Equal(t, "error", res.Reason)
+			assert.False(t, res.Completed)
+
+			var seen map[string]string
+			require.NoError(t, json.Unmarshal([]byte(acct), &seen))
+
+			for _, v := range seen {
+				assert.Contains(t, err.Error(), strconv.Quote(v), "the error names what claude reported")
+			}
+
+			rec := f.recorded(t)
+			assert.Empty(t, rec.Stdin, "the task reached a process that would not bill the subscription")
+			assert.True(t, processGone(rec.PID))
+			requireNoRunDirs(t, f.spec.Home)
+
+			evs := f.log.events(t)
+			assert.Empty(t, ofKind(evs, events.ModelRequest))
+			require.Len(t, ofKind(evs, events.ErrorKind), 1)
+			require.Len(t, stops(evs), 1)
+			assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
+		})
+	}
+}
+
+func TestRunProceedsWithoutAccount(t *testing.T) {
+	f := newFakeRun(t, fakeclaude.Scenario{Replay: fixture(t, "real/t1.jsonl"), NoAccount: true})
+
+	res, err := Run(boundCtx(t), f.spec)
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+}
+
 func TestRunCleansRunDir(t *testing.T) {
 	for name, sc := range map[string]fakeclaude.Scenario{
 		"done":  {Replay: "real/t1.jsonl"},

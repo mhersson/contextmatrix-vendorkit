@@ -23,7 +23,8 @@
 // fresh config dir on resume. Every invocation passes
 // --system-prompt-snapshot off, so a resumed start runs its own system
 // prompt. Readiness is the stream-json initialize control_response; the task
-// is written only after it.
+// is written only after it, and only when the account that answer reports
+// (if any) is the OAuth token on the first-party API.
 //
 // Errors to branch on: *UsageLimitError (park or show the state, never
 // retry), ErrNotLoggedIn (the token was not accepted), and an error wrapping

@@ -45,6 +45,7 @@ type Session struct {
 	endCause  error  // what an in-flight turn is finished with
 
 	// Written by the reader goroutine; read by others after ended closes.
+	startErr   error // the initialize answer's account failed checkAccount
 	turns      int
 	stopReason string
 	exitErr    error
@@ -132,7 +133,11 @@ func startSession(ctx context.Context, spec Spec, o runOpts) (*Session, error) {
 		return s, nil
 	case <-s.ended:
 		startErr = errors.New("claudecode: claude exited before answering the initialize request")
-		if s.exitErr != nil {
+
+		switch {
+		case s.startErr != nil:
+			startErr = s.startErr
+		case s.exitErr != nil:
 			startErr = fmt.Errorf("%w: %w", startErr, s.exitErr)
 		}
 	case <-gate.C:
@@ -295,7 +300,14 @@ func (s *Session) read() {
 		}
 
 		if !ready {
-			if isInitResponse(line, s.reqID) {
+			if acct, ok := initResponse(line, s.reqID); ok {
+				if err := s.o.checkAccount(acct); err != nil {
+					s.startErr = err
+					_ = s.requestEnd("error", nil)
+
+					continue
+				}
+
 				ready = true
 
 				close(s.ready)

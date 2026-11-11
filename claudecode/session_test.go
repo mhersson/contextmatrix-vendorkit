@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -207,7 +208,11 @@ func TestSessionNoDroppedFirstMessage(t *testing.T) {
 		_, err = p.Stdin().Write(append(initRequest("init-early"), early...))
 		require.NoError(t, err)
 
-		awaitLine(t, p, func(line []byte) bool { return isInitResponse(line, "init-early") })
+		awaitLine(t, p, func(line []byte) bool {
+			_, ok := initResponse(line, "init-early")
+
+			return ok
+		})
 
 		late, err := userMessage(t7bFirst, nil)
 		require.NoError(t, err)
@@ -678,6 +683,37 @@ func TestSessionExitBeforeReady(t *testing.T) {
 	evs := f.log.events(t)
 	require.Len(t, stops(evs), 1)
 	assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
+}
+
+func TestSessionFailsClosedOnForeignAccount(t *testing.T) {
+	for name, acct := range foreignAccounts {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: t7bTurns(t), Account: json.RawMessage(acct)})
+
+			s, err := startSession(boundCtx(t), f.spec, sessionOpts())
+
+			require.ErrorIs(t, err, errNotSubscription)
+			assert.Nil(t, s)
+			assert.True(t, processGone(f.recorded(t).PID))
+			requireNoRunDirs(t, f.spec.Home)
+
+			// As any failed start: no turn, and the process's one stop.
+			evs := f.log.events(t)
+			assert.Empty(t, ofKind(evs, events.UserInput))
+			require.Len(t, stops(evs), 1)
+			assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
+		})
+	}
+}
+
+func TestSessionProceedsWithoutAccount(t *testing.T) {
+	f := newFakeSession(t, fakeclaude.Scenario{Turns: t7bTurns(t), NoAccount: true})
+	s := startFake(t, f, sessionOpts())
+
+	res, err := s.Send(boundCtx(t), t7bFirst, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+	require.NoError(t, s.Close())
 }
 
 func TestSessionUsageLimitEndsSession(t *testing.T) {

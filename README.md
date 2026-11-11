@@ -75,6 +75,10 @@ Events are the harness kinds, in harness order. The ones that differ:
   runs its own system prompt.
 - Readiness is the stream-json `initialize` control_request/control_response,
   for both `Run` and `Session`; the first message is written only after it.
+  When the answer carries an `account`, the start fails closed unless it
+  reports `tokenSource: "CLAUDE_CODE_OAUTH_TOKEN"`, `apiProvider:
+  "firstParty"` and no API key source; the error names what Claude Code
+  reported. An answer without `account` proceeds.
 - Stopping a run goes through an http stop hook on the loopback bridge, not
   signals alone.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
@@ -85,8 +89,11 @@ Events are the harness kinds, in harness order. The ones that differ:
   start, holding the generated config) and `sessions/` (the transcript store).
   The Claude Code config dir is fresh per process start; a resume restores
   only the stored transcript into it.
-- The child environment is scrubbed, and the OAuth token is masked in every
-  event, Result field, error, stderr tail and stored transcript.
+- The child environment is scrubbed of every variable 2.1.322 reads that
+  moves a run off the subscription token: API keys and endpoints, the
+  `CLAUDE_CODE_USE_*` provider switches, host-managed provider settings and
+  `CLAUDE_CODE_SIMPLE` (the env form of `--bare`). The OAuth token is masked in
+  every event, Result field, error, stderr tail and stored transcript.
 
 ## Tested version
 

@@ -47,6 +47,7 @@ func smokeRun(t *testing.T, binary, mockURL string) (Spec, runOpts, *streamLog) 
 		grace:       stopGrace,
 		extraEnv:    []string{"ANTHROPIC_BASE_URL=" + mockURL, "ANTHROPIC_API_KEY=dummy-key"},
 		onLine:      stream.add,
+		anyAccount:  true,
 	}
 
 	return Spec{

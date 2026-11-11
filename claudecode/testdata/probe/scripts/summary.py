@@ -146,3 +146,10 @@ for run in "abc":
     reqs = [q for q in jl(f"{S}/mock/snapshot/mock-{run}/requests.jsonl") if (q.get("params") or {}).get("stream")]
     print(f"{run}: markers={[q.get('system_markers') for q in reqs]}")
 print("(a: first launch file APPEND; b: resumed with REPLACE file; c: same plus --system-prompt-snapshot off)")
+
+section("account check")
+for name in ["oauth", "oauth-key", "oauth-bedrock", "oauth-mantle", "oauth-simple", "oauth-socket", "both"]:
+    cr = [d for d in jl(f"{S}/mock/account/{name}/stdout.jsonl") if d.get("type") == "control_response"]
+    print(f"{name}: account={cr[0]['response'].get('response', {}).get('account') if cr else None}")
+reqs = [q for q in jl(f"{S}/mock/account/both/requests.jsonl") if (q.get("params") or {}).get("stream")]
+print("both: authorization", {q.get("authorization") for q in reqs}, "x-api-key", {q.get("x_api_key") for q in reqs})

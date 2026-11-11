@@ -18,11 +18,16 @@ import (
 // serverName is the bridge's MCP server name, so the model sees mcp__cm__<tool>.
 const serverName = "cm"
 
-// droppedEnv are removed from the child env: a stray API key or endpoint
-// silently overrides the subscription token.
+// droppedEnv are removed from the child env: a stray API key, endpoint or
+// provider switch silently overrides the subscription token. The names are the
+// ones 2.1.322 reads; checkAccount catches any it adds later.
 var droppedEnv = []string{
-	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_RETRY_WATCHDOG",
+	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_UNIX_SOCKET",
+	"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_HOST_AUTH_ENV_VAR", "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+	"CLAUDE_CODE_SIMPLE",
+	"CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_BEDROCK",
+	"CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_VERTEX",
+	"CLAUDE_CODE_RETRY_WATCHDOG",
 }
 
 type bridgeInfo struct {

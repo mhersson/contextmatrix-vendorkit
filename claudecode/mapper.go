@@ -307,6 +307,8 @@ func (m *mapper) finish(procErr error) (harness.Result, error) {
 		m.conclude("done", nil)
 	case m.authFailed:
 		m.conclude("error", m.notLoggedIn(""))
+	case errors.Is(procErr, errNotSubscription):
+		m.conclude("error", &maskedError{text: m.mask(procErr.Error()), err: procErr})
 	case errors.Is(procErr, context.Canceled) || errors.Is(procErr, context.DeadlineExceeded):
 		m.conclude("canceled", m.wrap("claudecode: run canceled", procErr))
 	case procErr != nil:

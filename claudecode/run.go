@@ -33,6 +33,35 @@ type runOpts struct {
 	grace       time.Duration
 	extraEnv    []string     // appended after the env scrub; the smoke tests point claude at a mock API
 	onLine      func([]byte) // every stdout line, unmasked; tests only
+	anyAccount  bool         // skip checkAccount; the smoke tests pay the mock with a dummy API key
+}
+
+// errNotSubscription marks a start whose initialize answer shows the run would
+// not bill the subscription token.
+var errNotSubscription = errors.New("claudecode: claude would not use the subscription token")
+
+// initAccount is the account the initialize answer reports.
+type initAccount struct {
+	TokenSource  string `json:"tokenSource"`
+	APIKeySource string `json:"apiKeySource"`
+	APIProvider  string `json:"apiProvider"`
+}
+
+// checkAccount fails closed on an account other than the OAuth token on the
+// first-party API. 2.1.322 reports an API key that outranks the token as
+// apiKeySource beside tokenSource. No account (another release) passes.
+func (o runOpts) checkAccount(a *initAccount) error {
+	if a == nil || o.anyAccount {
+		return nil
+	}
+
+	if a.TokenSource == "CLAUDE_CODE_OAUTH_TOKEN" && a.APIProvider == "firstParty" &&
+		(a.APIKeySource == "" || a.APIKeySource == "none") {
+		return nil
+	}
+
+	return fmt.Errorf("%w (token source %q, API provider %q, API key source %q)",
+		errNotSubscription, a.TokenSource, a.APIProvider, a.APIKeySource)
 }
 
 // Run executes one unit of work (an agent phase, an architect stage, a mob or
@@ -232,7 +261,13 @@ func supervise(ctx context.Context, p *subproc.Proc, m *mapper, task []byte, o r
 				o.onLine(line)
 			}
 
-			if gateC != nil && isInitResponse(line, reqID) {
+			if acct, isInit := initResponse(line, reqID); gateC != nil && isInit {
+				if err := o.checkAccount(acct); err != nil {
+					_ = settle(ctx, p, o.grace, false)
+
+					return err
+				}
+
 				gateC = nil
 
 				// A large task can fill the pipe, so stdout keeps draining while it
@@ -306,19 +341,28 @@ func initRequest(id string) []byte {
 	return append(b, '\n')
 }
 
-func isInitResponse(line []byte, id string) bool {
+// initResponse reports whether line answers initialize request id, and the
+// account it reports (nil when absent).
+func initResponse(line []byte, id string) (*initAccount, bool) {
 	if !bytes.Contains(line, []byte(`"control_response"`)) {
-		return false
+		return nil, false
 	}
 
 	var l struct {
 		Type     string `json:"type"`
 		Response struct {
 			RequestID string `json:"request_id"`
+			Response  struct {
+				Account *initAccount `json:"account"`
+			} `json:"response"`
 		} `json:"response"`
 	}
 
-	return json.Unmarshal(line, &l) == nil && l.Type == "control_response" && l.Response.RequestID == id
+	if json.Unmarshal(line, &l) != nil || l.Type != "control_response" || l.Response.RequestID != id {
+		return nil, false
+	}
+
+	return l.Response.Response.Account, true
 }
 
 func qualify(b *mcpbridge.Bridge, names []string) []string {
@@ -335,11 +379,12 @@ func maskErr(mask func(string) string, err error) error {
 }
 
 // withStderr adds the stderr tail to an untyped failure; a usage limit, a
-// login failure or a cancellation already says what happened.
+// login or account failure or a cancellation already says what happened.
 func withStderr(err error, reason, detail string) error {
 	var ule *UsageLimitError
 
-	if err == nil || reason != "error" || detail == "" || errors.Is(err, ErrNotLoggedIn) || errors.As(err, &ule) {
+	if err == nil || reason != "error" || detail == "" || errors.Is(err, ErrNotLoggedIn) ||
+		errors.Is(err, errNotSubscription) || errors.As(err, &ule) {
 		return err
 	}
 

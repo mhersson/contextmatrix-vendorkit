@@ -5,7 +5,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 : "${SCRATCH:?set SCRATCH to an empty scratch directory}"
 "$HERE/noenv.sh"
-for s in bash-and-permissions flags gate max-turns p6 snapshot; do
+for s in bash-and-permissions flags gate max-turns p6 snapshot account; do
   "$HERE/jail.sh" "$HERE/$s.sh"
 done
 python3 -I "$HERE/summary.py" "$SCRATCH"

@@ -327,19 +327,28 @@ func TestNormalizeEffort(t *testing.T) {
 }
 
 func TestChildEnv(t *testing.T) {
+	// Every variable 2.1.322 reads that moves a run off the subscription token.
+	dropped := []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_UNIX_SOCKET",
+		"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
+		"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "CLAUDE_CODE_SIMPLE",
+		"CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_GATEWAY", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_VERTEX",
+		"CLAUDE_CODE_RETRY_WATCHDOG",
+	}
+
 	s := testSpec()
-	s.Env = []string{
-		"ANTHROPIC_API_KEY=x", "ANTHROPIC_BASE_URL=y", "ANTHROPIC_AUTH_TOKEN=z",
-		"CLAUDE_CODE_USE_BEDROCK=1", "CLAUDE_CODE_RETRY_WATCHDOG=1",
-		"HOME=/x", "CLAUDE_CONFIG_DIR=/y", "KEEP=1",
+	s.Env = []string{"HOME=/x", "CLAUDE_CONFIG_DIR=/y", "KEEP=1"}
+
+	for _, name := range dropped {
+		s.Env = append(s.Env, name+"=1")
 	}
 
 	env := childEnv(s, "/run/config")
 
 	for _, kv := range env {
-		assert.False(t, strings.HasPrefix(kv, "ANTHROPIC_"), kv)
-		assert.False(t, strings.HasPrefix(kv, "CLAUDE_CODE_USE_"), kv)
-		assert.False(t, strings.HasPrefix(kv, "CLAUDE_CODE_RETRY_WATCHDOG"), kv)
+		name, _, _ := strings.Cut(kv, "=")
+		assert.NotContains(t, dropped, name)
 	}
 
 	assert.Contains(t, env, "HOME=/home/u")
