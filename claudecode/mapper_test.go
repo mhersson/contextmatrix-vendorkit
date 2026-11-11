@@ -334,6 +334,60 @@ func TestMapperCallClosesOnNextCall(t *testing.T) {
 	}
 }
 
+// dropResultKey removes key from the result line, as an older release would
+// omit it.
+func dropResultKey(t *testing.T, data []byte, key string) []byte {
+	t.Helper()
+
+	var out []byte
+
+	for line := range bytes.Lines(data) {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(line, &fields); err == nil && string(fields["type"]) == `"result"` {
+			require.Contains(t, fields, key)
+			delete(fields, key)
+
+			b, err := json.Marshal(fields)
+			require.NoError(t, err)
+
+			out = append(out, b...)
+			out = append(out, '\n')
+
+			continue
+		}
+
+		out = append(out, line...)
+	}
+
+	return out
+}
+
+func TestMapperResumedRunCountsOnlyThisProcess(t *testing.T) {
+	// run-b resumed run-a's session from a fresh config dir: its modelUsage and
+	// total_cost_usd are cumulative over both processes.
+	for _, path := range []string{"probe/p6/run-a.jsonl", "probe/p6/run-b.jsonl"} {
+		t.Run(path, func(t *testing.T) {
+			evs, res, err := replay(t, path, mapperOpts{Prefix: "mcp__cm__"})
+			require.NoError(t, err)
+
+			assert.Equal(t, buckets{20, 10, 0, 0}, resultBuckets(res), "this process's result.usage")
+			assert.Equal(t, resultBuckets(res), sumUsage(t, evs))
+			assert.Len(t, ofKind(evs, events.UsageKind), len(ofKind(evs, events.ModelResponse)), "no remainder event")
+			assert.InDelta(t, 7e-06, res.TotalCostUSD, 1e-12, "this process's model_usage_since_last_result cost")
+		})
+	}
+
+	t.Run("fallback without model_usage_since_last_result", func(t *testing.T) {
+		data := dropResultKey(t, readFixture(t, "probe/p6/run-b.jsonl"), "model_usage_since_last_result")
+
+		evs, res, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__"}, nil)
+		require.NoError(t, err)
+
+		assert.Equal(t, buckets{40, 20, 0, 0}, sumUsage(t, evs), "remainder from modelUsage")
+		assert.InDelta(t, 1.4e-05, res.TotalCostUSD, 1e-12, "total_cost_usd")
+	})
+}
+
 func TestMapperRemainderPerModel(t *testing.T) {
 	evs, res, err := replay(t, "synthetic/two_models.jsonl", mapperOpts{Prefix: cmlocal})
 	require.NoError(t, err)

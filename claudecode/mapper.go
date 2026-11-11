@@ -546,17 +546,16 @@ func (m *mapper) onResult(l streamLine) {
 
 	m.sawResult = true
 
-	perModel := l.ModelUsage
-	m.res.TotalCostUSD = l.TotalCostUSD
+	// modelUsage and total_cost_usd are cumulative over a resumed session (and
+	// a Session's earlier turns); this process's or turn's share is here.
+	perModel := l.ModelUsageSinceLastResult
+	for _, u := range perModel {
+		m.res.TotalCostUSD += u.CostUSD
+	}
 
-	if m.o.Session {
-		// total_cost_usd is cumulative over the process; the turn's share is here.
-		perModel = l.ModelUsageSinceLastResult
-		m.res.TotalCostUSD = 0
-
-		for _, u := range perModel {
-			m.res.TotalCostUSD += u.CostUSD
-		}
+	if perModel == nil && !m.o.Session {
+		perModel = l.ModelUsage
+		m.res.TotalCostUSD = l.TotalCostUSD
 	}
 
 	// Calls Claude Code made without streaming them (compaction, for one) show
