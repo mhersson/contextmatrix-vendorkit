@@ -1079,6 +1079,12 @@ func TestMapperUsageLimitFromResult(t *testing.T) {
 	assert.Equal(t, "error", res.Reason)
 	require.Len(t, ofKind(evs, events.Kind("usage_limit")), 1)
 	assert.Empty(t, ofKind(evs, events.ErrorKind))
+
+	// A Session turn that hit the limit does not await the human; the
+	// session's stop follows.
+	evs, _, err = replayData(t, []byte(data), mapperOpts{Session: true}, nil)
+	require.ErrorAs(t, err, &ule)
+	assert.Empty(t, ofKind(evs, events.StateChange))
 }
 
 func TestMapperNotLoggedIn(t *testing.T) {

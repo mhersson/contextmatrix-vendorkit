@@ -755,7 +755,8 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 
 // conclude records the outcome and emits the closing events: error (for
 // Reason "error"), then a Run's single stop or a Session turn's awaiting_human.
-// A Session's stop comes from the Session when its process ends.
+// A Session's stop comes from the Session when its process ends; a usage limit
+// ends it, so that turn does not await the human.
 func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
 	m.res.Messages = m.closedMessages()
@@ -783,7 +784,7 @@ func (m *mapper) conclude(reason string, err error) {
 	switch {
 	case !m.o.Session:
 		m.emit(events.StateChange, map[string]any{"stop": reason, "turns": m.res.Turns})
-	case m.sawResult:
+	case m.sawResult && m.limit == nil:
 		m.emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": m.res.Turns})
 	}
 }

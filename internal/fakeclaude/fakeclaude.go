@@ -47,6 +47,7 @@ type Scenario struct {
 	Plant       bool          // write settings.json and CLAUDE.md into CLAUDE_CONFIG_DIR, as a hostile Bash command would
 	InitDelay   time.Duration // answer the initialize control_request after this long
 	NoInit      bool          // never answer the initialize control_request
+	ExitAtStart bool          // write Stderr and exit with ExitCode before reading stdin
 
 	// Turns replaces Steps and Replay for a long-lived session: one fixture
 	// per user message received. A turn without a result line ends the process.
@@ -178,6 +179,12 @@ func (p *proc) run() int {
 	// gets that far still learns the PID.
 	if err := p.write(rec); err != nil {
 		return fail(err)
+	}
+
+	if p.sc.ExitAtStart {
+		_, _ = os.Stderr.WriteString(p.sc.Stderr)
+
+		return p.sc.ExitCode
 	}
 
 	if id := p.flags.values["--resume"]; id != "" {

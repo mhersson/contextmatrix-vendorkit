@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -77,8 +78,8 @@ func startFake(t *testing.T, f *fakeRun, o runOpts) *Session {
 	return s
 }
 
-// sendCtx bounds a Send so a hang fails the test instead of stalling it.
-func sendCtx(t *testing.T) context.Context {
+// boundCtx bounds a call so a hang fails the test instead of stalling it.
+func boundCtx(t *testing.T) context.Context {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -131,11 +132,11 @@ func TestSessionTwoTurns(t *testing.T) {
 	assert.GreaterOrEqual(t, time.Since(started), initDelay, "StartSession returned before claude answered initialize")
 	assert.Regexp(t, uuidV4, s.ID())
 
-	first, err := s.Send(sendCtx(t), t7bFirst, nil)
+	first, err := s.Send(boundCtx(t), t7bFirst, nil)
 	require.NoError(t, err)
 	assert.Equal(t, s.ID(), stream.last(t, "system", "init")["session_id"])
 
-	second, err := s.Send(sendCtx(t), t7bSecond, nil)
+	second, err := s.Send(boundCtx(t), t7bSecond, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "noted", first.Output)
@@ -225,7 +226,7 @@ func TestSessionNoDroppedFirstMessage(t *testing.T) {
 		f := newFakeSession(t, fakeclaude.Scenario{Turns: turns[:1], InitDelay: initDelay})
 		s := startFake(t, f, sessionOpts())
 
-		res, err := s.Send(sendCtx(t), t7bFirst, nil)
+		res, err := s.Send(boundCtx(t), t7bFirst, nil)
 		require.NoError(t, err)
 		assert.Equal(t, "noted", res.Output)
 		assert.False(t, f.recorded(t).EarlyInput)
@@ -265,7 +266,7 @@ func TestSessionSendsSerialize(t *testing.T) {
 		out := make(chan sent, 1)
 
 		go func() {
-			res, err := s.Send(sendCtx(t), text, nil)
+			res, err := s.Send(boundCtx(t), text, nil)
 			out <- sent{res, err}
 		}()
 
@@ -300,13 +301,13 @@ func TestSessionSendAfterExit(t *testing.T) {
 	})
 	s := startFake(t, f, sessionOpts())
 
-	res, err := s.Send(sendCtx(t), t7bFirst, nil)
+	res, err := s.Send(boundCtx(t), t7bFirst, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "noted", res.Output)
 
 	for range 2 {
 		start := time.Now()
-		res, err := s.Send(sendCtx(t), t7bSecond, nil)
+		res, err := s.Send(boundCtx(t), t7bSecond, nil)
 
 		require.Error(t, err)
 		assert.Less(t, time.Since(start), time.Second)
@@ -325,7 +326,7 @@ func TestSessionCancelEndsSession(t *testing.T) {
 	})
 	s := startFake(t, f, sessionOpts())
 
-	ctx, cancel := context.WithCancelCause(sendCtx(t))
+	ctx, cancel := context.WithCancelCause(boundCtx(t))
 	defer cancel(nil)
 
 	cause := errors.New("cost cap")
@@ -365,7 +366,7 @@ func TestSessionCancelEndsSession(t *testing.T) {
 	requireNoRunDirs(t, f.spec.Home)
 
 	start := time.Now()
-	_, err = s.Send(sendCtx(t), "again", nil)
+	_, err = s.Send(boundCtx(t), "again", nil)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), time.Second)
 }
@@ -378,7 +379,7 @@ func TestSessionClose(t *testing.T) {
 
 	s := startFake(t, f, sessionOpts())
 
-	_, err := s.Send(sendCtx(t), t7bFirst, nil)
+	_, err := s.Send(boundCtx(t), t7bFirst, nil)
 	require.NoError(t, err)
 
 	first := s.Close()
@@ -394,7 +395,7 @@ func TestSessionClose(t *testing.T) {
 	requireNoRunDirs(t, f.spec.Home)
 	assert.FileExists(t, keep)
 
-	_, err = s.Send(sendCtx(t), t7bSecond, nil)
+	_, err = s.Send(boundCtx(t), t7bSecond, nil)
 	require.Error(t, err)
 }
 
@@ -408,7 +409,7 @@ func sendInFlight(t *testing.T) (*fakeRun, *Session, <-chan error) {
 	errc := make(chan error, 1)
 
 	go func() {
-		res, err := s.Send(sendCtx(t), "work", nil)
+		res, err := s.Send(boundCtx(t), "work", nil)
 		if err == nil || res.Reason != "canceled" {
 			err = fmt.Errorf("send returned Reason %q, err %w", res.Reason, err)
 		}
@@ -438,7 +439,7 @@ func TestSessionCloseDuringTurn(t *testing.T) {
 func TestSessionCancelWhileQueued(t *testing.T) {
 	f, s, errc := sendInFlight(t)
 
-	ctx, cancel := context.WithCancelCause(sendCtx(t))
+	ctx, cancel := context.WithCancelCause(boundCtx(t))
 	cause := errors.New("cost cap")
 	cancel(cause)
 
@@ -468,7 +469,7 @@ func TestSessionStopOnceAtEnd(t *testing.T) {
 		s := startFake(t, f, sessionOpts())
 
 		for _, text := range []string{t7bFirst, t7bSecond} {
-			_, err := s.Send(sendCtx(t), text, nil)
+			_, err := s.Send(boundCtx(t), text, nil)
 			require.NoError(t, err)
 		}
 
@@ -508,10 +509,10 @@ func TestSessionStopOnceAtEnd(t *testing.T) {
 		f := newFakeSession(t, fakeclaude.Scenario{Turns: t7bTurns(t)[:1], ExitAfterTurns: true, ExitCode: 1})
 		s := startFake(t, f, sessionOpts())
 
-		_, err := s.Send(sendCtx(t), t7bFirst, nil)
+		_, err := s.Send(boundCtx(t), t7bFirst, nil)
 		require.NoError(t, err)
 
-		_, err = s.Send(sendCtx(t), t7bSecond, nil)
+		_, err = s.Send(boundCtx(t), t7bSecond, nil)
 		require.Error(t, err)
 
 		require.NoError(t, s.Close())
@@ -530,7 +531,7 @@ func TestSessionResume(t *testing.T) {
 	a.spec.Home, a.spec.Dir = home, dir
 	sa := startFake(t, a, sessionOpts())
 
-	_, err := sa.Send(sendCtx(t), t7bFirst, nil)
+	_, err := sa.Send(boundCtx(t), t7bFirst, nil)
 	require.NoError(t, err)
 
 	key := fakeclaude.ProjectKey(evalDir(t, dir))
@@ -550,7 +551,7 @@ func TestSessionResume(t *testing.T) {
 
 	assert.Equal(t, sa.ID(), sb.ID())
 
-	res, err := sb.Send(sendCtx(t), t7bSecond, nil)
+	res, err := sb.Send(boundCtx(t), t7bSecond, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "7", res.Output)
 	assert.Equal(t, sb.ID(), stream.last(t, "system", "init")["session_id"])
@@ -580,12 +581,110 @@ func TestSessionInitializeTimeout(t *testing.T) {
 	assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
 }
 
+// usageLimitResult is a turn that ends in the 429 result a usage limit gives,
+// with no rejected rate_limit_event before it.
+const usageLimitResult = `{"type":"system","subtype":"init","session_id":"limit-fixture-session"}
+{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached","num_turns":1,"usage":{},"session_id":"limit-fixture-session"}
+`
+
+func TestSessionUsageLimitFromResultEndsSession(t *testing.T) {
+	turn := filepath.Join(t.TempDir(), "limit.jsonl")
+	require.NoError(t, os.WriteFile(turn, []byte(usageLimitResult), 0o600))
+
+	// Like the CLI, the fake would wait for the next message after this result.
+	f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{turn}})
+	s := startFake(t, f, sessionOpts())
+
+	res, err := s.Send(boundCtx(t), "work", nil)
+
+	var ule *UsageLimitError
+	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "error", res.Reason)
+	assert.True(t, processGone(f.recorded(t).PID), "the process outlived the usage limit")
+
+	evs := f.log.events(t)
+	require.GreaterOrEqual(t, len(evs), 2)
+	assert.Equal(t, events.Kind("usage_limit"), evs[len(evs)-2].Kind)
+	require.Len(t, stops(evs), 1)
+	assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
+
+	for _, ev := range ofKind(evs, events.StateChange) {
+		assert.NotEqual(t, "awaiting_human", ev.Data["state"])
+	}
+
+	start := time.Now()
+	_, err = s.Send(boundCtx(t), "again", nil)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+func TestSessionStartCanceled(t *testing.T) {
+	f := newFakeSession(t, fakeclaude.Scenario{NoInit: true})
+
+	ctx, cancel := context.WithCancelCause(boundCtx(t))
+	defer cancel(nil)
+
+	cause := errors.New("worker shutdown")
+
+	go func() {
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if _, err := os.Stat(f.record); err == nil {
+					cancel(cause)
+
+					return
+				}
+			}
+		}
+	}()
+
+	start := time.Now()
+	s, err := startSession(ctx, f.spec, sessionOpts())
+
+	require.ErrorIs(t, err, cause)
+	assert.Nil(t, s)
+	assert.Less(t, time.Since(start), 3*time.Second)
+	assert.True(t, processGone(f.recorded(t).PID))
+	requireNoRunDirs(t, f.spec.Home)
+
+	evs := f.log.events(t)
+	require.Len(t, stops(evs), 1)
+	assert.Equal(t, "canceled", evs[len(evs)-1].Data["stop"])
+}
+
+func TestSessionExitBeforeReady(t *testing.T) {
+	f := newFakeSession(t, fakeclaude.Scenario{ExitAtStart: true, ExitCode: 3, Stderr: "fatal: bad config " + fakeToken + "\n"})
+
+	s, err := startSession(boundCtx(t), f.spec, sessionOpts())
+
+	require.Error(t, err)
+	assert.Nil(t, s)
+
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 3, exit.ExitCode())
+	assert.Contains(t, err.Error(), "fatal: bad config", "the stderr tail is missing from the error")
+	assert.NotContains(t, err.Error(), fakeToken)
+	assert.True(t, processGone(f.recorded(t).PID))
+	requireNoRunDirs(t, f.spec.Home)
+
+	evs := f.log.events(t)
+	require.Len(t, stops(evs), 1)
+	assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
+}
+
 func TestSessionUsageLimitEndsSession(t *testing.T) {
 	f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{fixture(t, "synthetic/rejected.jsonl")}, Hang: true})
 	s := startFake(t, f, sessionOpts())
 
 	start := time.Now()
-	res, err := s.Send(sendCtx(t), "work", nil)
+	res, err := s.Send(boundCtx(t), "work", nil)
 
 	assert.Less(t, time.Since(start), 3*time.Second)
 

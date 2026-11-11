@@ -156,8 +156,10 @@ func startSession(ctx context.Context, spec Spec, o runOpts) (*Session, error) {
 // "canceled" with an error wrapping context.Cause(ctx); a result that came
 // first keeps its outcome. Send emits user_input first and state_change
 // awaiting_human after the turn, and stores the transcript before it returns.
-// Result.Messages holds this turn only. Send on a session whose process has
-// exited returns an error at once.
+// Result.Messages holds this turn only. A usage limit ends the session. Send on
+// a session whose process has exited returns an error at once. Never call it
+// from Spec.OnDelta, Spec.OnRateLimit or the Emitter's writers: the session
+// calls them mid-turn or while ending, so the call deadlocks.
 func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) (harness.Result, error) {
 	select {
 	case s.sem <- struct{}{}:
@@ -230,7 +232,8 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 
 // Close ends the session: SIGTERM to the process group, SIGKILL after a grace
 // period, then waits for the exit and the cleanup. A turn in flight returns
-// Reason "canceled". A second Close returns the first one's result.
+// Reason "canceled". A second Close returns the first one's result. Never call
+// it from Spec.OnDelta, Spec.OnRateLimit or the Emitter's writers (see Send).
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() {
 		var stopErr error
@@ -312,18 +315,18 @@ func (s *Session) read() {
 		v := t.m.feed(line)
 
 		switch {
+		case v == stopNow || t.m.limit != nil:
+			// A usage limit, from a rate_limit_event or the result, or a failed
+			// bridge server stops the process; the end path finishes the turn.
+			halted = true
+
+			_ = s.requestEnd("error", nil)
 		case t.m.sawResult:
 			s.mu.Lock()
 			s.turn = nil
 			s.mu.Unlock()
 
 			s.completeTurn(t)
-		case v == stopNow:
-			// A usage limit or a failed bridge server; the turn is finished
-			// with the process.
-			halted = true
-
-			_ = s.requestEnd("error", nil)
 		}
 	}
 

@@ -474,7 +474,7 @@ func TestRunUsageLimit(t *testing.T) {
 func TestRunWaitsForInitialize(t *testing.T) {
 	f := newFakeRun(t, fakeclaude.Scenario{Replay: fixture(t, "real/t1.jsonl"), InitDelay: 300 * time.Millisecond})
 
-	_, err := Run(t.Context(), f.spec)
+	_, err := Run(boundCtx(t), f.spec)
 	require.NoError(t, err)
 	assert.False(t, f.recorded(t).EarlyInput, "the task was written before claude answered initialize")
 }
