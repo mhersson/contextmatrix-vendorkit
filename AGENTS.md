@@ -50,12 +50,17 @@ allowlist, so the vendor executor lives here.
   ContextMatrix tool installs, upgrades or changes it. `CheckVersion` reports a
   mismatch for the caller to log as a warning, and a run on an untested release
   proceeds (if it fails, the error says which version ran).
-- Moving `Version` is a tested change: new fixtures, the CLI probes re-run, and
+- Moving `Version` is a tested change: new fixtures, the CLI probes re-run, the
+  opt-in smoke tests (`VENDORKIT_SMOKE_CLAUDE`, `VENDORKIT_SMOKE_MOCK`, run via
+  `claudecode/testdata/probe/scripts/smoke.sh` inside `jail.sh`) and
   a live auth check by the operator.
 - A release that makes `--bare` the `-p` default ignores the OAuth token and
   fails loudly as `ErrNotLoggedIn`; the operator decides how to move past it
   when it happens.
-- Never pass `--bare`. The isolation flags are always on.
+- Never pass `--bare`. The isolation flags are always on, and every invocation
+  passes `--system-prompt-snapshot off`.
+- Never call `Session.Close` or `Session.Send` from `OnDelta`, `OnRateLimit` or
+  an Emitter writer: the session calls them mid-turn, so it deadlocks.
 - The OAuth token is masked in everything the module emits or returns. No real
   token in tests, fixtures or CI: tests use the fake binary and every fixture
   passes the token scan.
