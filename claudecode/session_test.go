@@ -735,3 +735,18 @@ func TestSessionUsageLimitEndsSession(t *testing.T) {
 	require.Len(t, stops(evs), 1)
 	assert.Equal(t, "error", evs[len(evs)-1].Data["stop"])
 }
+
+func TestSessionFailsClosedOnUnreadableAccount(t *testing.T) {
+	for name, acct := range unreadableAccounts {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: t7bTurns(t), Account: json.RawMessage(acct)})
+
+			start := time.Now()
+			s, err := startSession(boundCtx(t), f.spec, sessionOpts())
+
+			require.ErrorIs(t, err, errNotSubscription, "an unreadable account fails as an account error, not a gate timeout")
+			assert.Less(t, time.Since(start), 5*time.Second)
+			assert.Nil(t, s)
+		})
+	}
+}

@@ -744,3 +744,25 @@ func TestRunCanceledBeforeStart(t *testing.T) {
 		})
 	}
 }
+
+// unreadableAccounts are account objects whose fields changed JSON type.
+var unreadableAccounts = map[string]string{
+	"number field":  `{"tokenSource":42,"apiProvider":"firstParty"}`,
+	"not an object": `"CLAUDE_CODE_OAUTH_TOKEN"`,
+}
+
+func TestRunFailsClosedOnUnreadableAccount(t *testing.T) {
+	for name, acct := range unreadableAccounts {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeRun(t, fakeclaude.Scenario{Replay: fixture(t, "real/t1.jsonl"), Account: json.RawMessage(acct)})
+
+			start := time.Now()
+			res, err := Run(boundCtx(t), f.spec)
+
+			require.ErrorIs(t, err, errNotSubscription, "an unreadable account fails as an account error, not a gate timeout")
+			assert.Less(t, time.Since(start), 5*time.Second)
+			assert.Equal(t, "error", res.Reason)
+			assert.Empty(t, f.recorded(t).Stdin)
+		})
+	}
+}
