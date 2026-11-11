@@ -25,6 +25,10 @@ type mapperOpts struct {
 	Prefix      string // "mcp__cm__", stripped from bridged tool names
 	Terminal    func() (string, json.RawMessage, bool)
 	Session     bool // per-turn accounting from model_usage_since_last_result
+
+	SystemPrompt string // seeds a system message in Result.Messages
+	Task         string
+	TaskImages   []llm.ImageURL
 }
 
 type verdict int
@@ -165,16 +169,21 @@ type mapper struct {
 	version string // claude_code_version from init
 	res     harness.Result
 	err     error
+
+	messages []llm.Message
 }
 
 func newMapper(o mapperOpts) *mapper {
-	return &mapper{
+	m := &mapper{
 		o:          o,
 		mask:       newMask(o.Secret, o.Redact),
 		maskSecret: newMask(o.Secret, nil),
 		closed:     map[string]bool{},
 		streamed:   map[string]tokenBuckets{},
 	}
+	m.messages = m.seedMessages()
+
+	return m
 }
 
 // feed consumes one stream-json line. Lines the mapper does not know, or that
@@ -542,6 +551,8 @@ func (m *mapper) onUser(msg *apiMessage) {
 
 	for _, r := range results {
 		text := toolResultText(r.Content)
+		m.messages = append(m.messages, llm.Message{Role: "tool", ToolCallID: m.maskSecret(r.ToolUseID), Content: m.mask(text)})
+
 		if r.IsError {
 			m.res.ToolCallFailures++
 			m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "error": m.mask(text)})
@@ -607,6 +618,8 @@ func (m *mapper) closeCall() {
 	m.streamed[c.model] = m.streamed[c.model].add(u)
 	m.streamedTotal = m.streamedTotal.add(u)
 	m.emitUsage(c.model, u)
+
+	m.messages = append(m.messages, m.assistantMessage(content, c.tools))
 
 	for _, t := range c.tools {
 		m.res.ToolCallCount++
@@ -705,6 +718,7 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 // A Session's stop comes from the Session when its process ends.
 func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
+	m.res.Messages = slices.Clone(m.messages)
 	m.res.Completed = reason == "done"
 	m.res.ModelUsed = m.maskSecret(m.res.ModelUsed)
 	m.err = m.annotate(reason, err)

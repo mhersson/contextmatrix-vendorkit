@@ -515,7 +515,7 @@ func TestMapperKeepsForeignServerNames(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					var deltaNames []string
 
-					evs, _, err := replayData(t, tc.data, mapperOpts{
+					evs, res, err := replayData(t, tc.data, mapperOpts{
 						Prefix: cmlocal,
 						OnDelta: func(d llm.Delta) {
 							if d.ToolCall != nil {
@@ -528,6 +528,16 @@ func TestMapperKeepsForeignServerNames(t *testing.T) {
 					calls := ofKind(evs, events.ToolCallKind)
 					require.Len(t, calls, 1)
 					assert.Equal(t, tc.want, calls[0].Data["name"])
+
+					var stored []string
+
+					for _, msg := range res.Messages {
+						for _, c := range msg.ToolCalls {
+							stored = append(stored, c.Function.Name)
+						}
+					}
+
+					assert.Equal(t, []string{tc.want}, stored)
 
 					for _, n := range deltaNames {
 						assert.Equal(t, tc.want, n)
