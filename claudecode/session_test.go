@@ -584,7 +584,7 @@ func TestSessionInitializeTimeout(t *testing.T) {
 // usageLimitResult is a turn that ends in the 429 result a usage limit gives,
 // with no rejected rate_limit_event before it.
 const usageLimitResult = `{"type":"system","subtype":"init","session_id":"limit-fixture-session"}
-{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached","num_turns":1,"usage":{},"session_id":"limit-fixture-session"}
+{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your 5-hour limit · resets 5pm (UTC)","num_turns":1,"usage":{},"session_id":"limit-fixture-session"}
 `
 
 func TestSessionUsageLimitFromResultEndsSession(t *testing.T) {
@@ -599,6 +599,7 @@ func TestSessionUsageLimitFromResultEndsSession(t *testing.T) {
 
 	var ule *UsageLimitError
 	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "five_hour", ule.Window)
 	assert.Equal(t, "error", res.Reason)
 	assert.True(t, processGone(f.recorded(t).PID), "the process outlived the usage limit")
 

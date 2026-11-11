@@ -1068,16 +1068,28 @@ func TestMapperUsageLimitUnknownReset(t *testing.T) {
 	assert.NotContains(t, limits[0].Data, "resets_at")
 }
 
+// limitResult is the 429 result 2.1.322 ends a run with at a usage limit.
+func limitResult(text string) string {
+	b, _ := json.Marshal(text)
+
+	return `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":` + string(b) + `,"num_turns":1,"usage":{}}` + "\n"
+}
+
 func TestMapperUsageLimitFromResult(t *testing.T) {
-	data := `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached","num_turns":1,"usage":{}}` + "\n"
+	data := limitResult("You've hit your weekly limit · resets Nov 12, 5pm (UTC)")
 
 	evs, res, err := replayData(t, []byte(data), mapperOpts{}, nil)
 
 	var ule *UsageLimitError
 
 	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "seven_day", ule.Window)
+	assert.True(t, ule.ResetsAt.IsZero(), "the text's reset is for humans; no rejected event gave one")
 	assert.Equal(t, "error", res.Reason)
-	require.Len(t, ofKind(evs, events.Kind("usage_limit")), 1)
+
+	limits := ofKind(evs, events.Kind("usage_limit"))
+	require.Len(t, limits, 1)
+	assert.Equal(t, map[string]any{"window": "seven_day"}, limits[0].Data)
 	assert.Empty(t, ofKind(evs, events.ErrorKind))
 
 	// A Session turn that hit the limit does not await the human; the
@@ -1085,6 +1097,79 @@ func TestMapperUsageLimitFromResult(t *testing.T) {
 	evs, _, err = replayData(t, []byte(data), mapperOpts{Session: true}, nil)
 	require.ErrorAs(t, err, &ule)
 	assert.Empty(t, ofKind(evs, events.StateChange))
+}
+
+func TestMapperUsageLimitResultWindows(t *testing.T) {
+	for _, tc := range []struct {
+		text, window string
+	}{
+		{"You've hit your 5-hour limit · resets 5pm (UTC)", "five_hour"},
+		{"You've hit your weekly limit · resets Nov 12, 5pm (UTC)", "seven_day"},
+		{"You've hit your Opus limit · resets Nov 12, 5pm (UTC)", "seven_day_opus"},
+		{"You've hit your Sonnet limit · resets Nov 12, 5pm (UTC)", "seven_day_sonnet"},
+		{"You've hit your Fable limit", "seven_day_overage_included"},
+		{"You've hit your usage credit limit", "overage"},
+		{"You've hit your usage limit · resets 5pm (UTC)", ""},
+		{"You've hit your monthly spend limit.", ""},
+		{"Claude AI USAGE LIMIT reached", ""},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			_, _, err := replayData(t, []byte(limitResult(tc.text)), mapperOpts{}, nil)
+
+			var ule *UsageLimitError
+
+			require.ErrorAs(t, err, &ule)
+			assert.Equal(t, tc.window, ule.Window)
+			assert.True(t, ule.ResetsAt.IsZero())
+		})
+	}
+
+	t.Run("another 429 is no usage limit", func(t *testing.T) {
+		_, res, err := replayData(t, []byte(limitResult("API Error: 429 rate_limit_error")), mapperOpts{}, nil)
+		require.Error(t, err)
+
+		var ule *UsageLimitError
+
+		assert.NotErrorAs(t, err, &ule)
+		assert.Equal(t, "error", res.Reason)
+	})
+}
+
+func TestMapperUsageLimitResultIgnoresAllowedWindow(t *testing.T) {
+	// The five_hour window was fine; the weekly one stopped the run.
+	allowed := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1794510000,"rateLimitType":"five_hour"}}` + "\n"
+	data := allowed + limitResult("You've hit your weekly limit · resets Nov 12, 5pm (UTC)")
+
+	evs, _, err := replayData(t, []byte(data), mapperOpts{}, nil)
+
+	var ule *UsageLimitError
+
+	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "seven_day", ule.Window)
+	assert.True(t, ule.ResetsAt.IsZero(), "the allowed window's reset must not be reported")
+
+	limits := ofKind(evs, events.Kind("usage_limit"))
+	require.Len(t, limits, 1)
+	assert.Equal(t, map[string]any{"window": "seven_day"}, limits[0].Data)
+}
+
+func TestMapperUsageLimitResultTakesRejectedWindow(t *testing.T) {
+	resetsAt := time.Unix(1794510000, 0).UTC()
+
+	var transcript bytes.Buffer
+
+	m := newMapper(mapperOpts{Emitter: events.NewEmitter(nil, &transcript)})
+	m.lastRL = RateLimit{Status: "rejected", Window: "seven_day_opus", ResetsAt: resetsAt}
+
+	m.feed([]byte(limitResult("You've hit your weekly limit")))
+
+	_, err := m.finish(nil)
+
+	var ule *UsageLimitError
+
+	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "seven_day_opus", ule.Window)
+	assert.True(t, resetsAt.Equal(ule.ResetsAt))
 }
 
 func TestMapperNotLoggedIn(t *testing.T) {

@@ -607,6 +607,42 @@ func (m *mapper) usageLimit(rl RateLimit) *UsageLimitError {
 	return &UsageLimitError{Window: m.mask(rl.Window), ResetsAt: rl.ResetsAt}
 }
 
+// limitPrefix opens 2.1.322's usage-limit message: "You've hit your <limit
+// name>...", the name taken from limitWindows.
+const limitPrefix = "You've hit your "
+
+// limitWindows maps 2.1.322's limit names back to their rateLimitType.
+var limitWindows = []struct{ name, window string }{
+	{"5-hour limit", "five_hour"},
+	{"weekly limit", "seven_day"},
+	{"Opus limit", "seven_day_opus"},
+	{"Sonnet limit", "seven_day_sonnet"},
+	{"Fable limit", "seven_day_overage_included"},
+	{"usage credit limit", "overage"},
+}
+
+func isUsageLimitText(text string) bool {
+	return strings.HasPrefix(text, limitPrefix) || strings.Contains(strings.ToLower(text), "usage limit")
+}
+
+// resultLimit reports a usage limit a 429 result carried. Only a rejected
+// rate_limit_event names the binding window; an allowed one may be another's.
+func (m *mapper) resultLimit(text string) *UsageLimitError {
+	if m.lastRL.Status == "rejected" {
+		return m.usageLimit(m.lastRL)
+	}
+
+	if rest, ok := strings.CutPrefix(text, limitPrefix); ok {
+		for _, w := range limitWindows {
+			if strings.HasPrefix(rest, w.name) {
+				return &UsageLimitError{Window: w.window}
+			}
+		}
+	}
+
+	return &UsageLimitError{}
+}
+
 // closeCall emits the open call's events in harness order.
 func (m *mapper) closeCall() {
 	c := m.open
@@ -726,9 +762,8 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 	switch {
 	case m.authFailed || (l.IsError && strings.HasPrefix(l.Result, "Not logged in")):
 		return "error", m.notLoggedIn(l.Result)
-	case l.IsError && l.APIErrorStatus != nil && *l.APIErrorStatus == 429 &&
-		strings.Contains(strings.ToLower(l.Result), "usage limit"):
-		m.limit = m.usageLimit(m.lastRL)
+	case l.IsError && l.APIErrorStatus != nil && *l.APIErrorStatus == 429 && isUsageLimitText(l.Result):
+		m.limit = m.resultLimit(l.Result)
 
 		return "error", m.limit
 	case l.Subtype == "error_max_turns":
