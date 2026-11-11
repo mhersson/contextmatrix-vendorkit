@@ -574,6 +574,30 @@ func TestMapperCapsReasons(t *testing.T) {
 	}
 }
 
+func TestMapperUnknownTerminalReason(t *testing.T) {
+	t1 := readFixture(t, "real/t1.jsonl")
+
+	want, wantRes, wantErr := replayData(t, t1, mapperOpts{}, nil)
+	require.NoError(t, wantErr)
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"absent", rewrite(t1, `"terminal_reason":"completed",`, "")},
+		{"unknown", rewrite(t1, `"terminal_reason":"completed"`, `"terminal_reason":"x_future_reason"`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NotEqual(t, t1, tc.data)
+
+			got, gotRes, err := replayData(t, tc.data, mapperOpts{}, nil)
+			require.NoError(t, err)
+			assert.Equal(t, stripVolatile(want), stripVolatile(got))
+			assert.Equal(t, wantRes, gotRes)
+		})
+	}
+}
+
 func TestMapperResultDecidesOverExitError(t *testing.T) {
 	_, res, err := replayData(t, readFixture(t, "real/t1.jsonl"), mapperOpts{}, errors.New("exit status 1"))
 	require.NoError(t, err)

@@ -585,12 +585,14 @@ func (m *mapper) onResult(l streamLine) {
 // subtype success.
 func (m *mapper) outcome(l streamLine) (string, error) {
 	switch {
-	case !l.IsError && (l.TerminalReason == "completed" || l.TerminalReason == "hook_stopped"):
-		return "done", nil
 	case l.Subtype == "error_max_turns":
 		return "max_turns", nil
 	case l.Subtype == "error_max_budget_usd":
 		return "max_cost", nil
+	case !l.IsError:
+		// terminal_reason is not consulted, so a release that drops or renames
+		// it degrades instead of failing every run.
+		return "done", nil
 	}
 
 	detail := l.Result
