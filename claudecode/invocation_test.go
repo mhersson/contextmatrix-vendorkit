@@ -141,6 +141,7 @@ func TestInvocationFiles(t *testing.T) {
 				Type    string            `json:"type"`
 				URL     string            `json:"url"`
 				Headers map[string]string `json:"headers"`
+				Timeout *int64            `json:"timeout"`
 			} `json:"mcpServers"`
 		}
 
@@ -151,6 +152,12 @@ func TestInvocationFiles(t *testing.T) {
 		assert.Equal(t, bi.Server.Headers, mcp.MCPServers["cm"].Headers)
 		assert.Equal(t, "http", mcp.MCPServers["contextmatrix"].Type)
 		assert.Equal(t, "v", mcp.MCPServers["contextmatrix"].Headers["K"])
+
+		// A bridged tool may run silent for minutes (agent verify); 2.1.322
+		// aborts a silent http call unless the server entry carries a timeout.
+		require.NotNil(t, mcp.MCPServers["cm"].Timeout)
+		assert.Equal(t, int64(100_000_000), *mcp.MCPServers["cm"].Timeout)
+		assert.Nil(t, mcp.MCPServers["contextmatrix"].Timeout, "only the bridge entry is lifted")
 
 		raw := files[filepath.Join(testRun, "settings.json")]
 

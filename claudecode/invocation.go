@@ -18,6 +18,11 @@ import (
 // serverName is the bridge's MCP server name, so the model sees mcp__cm__<tool>.
 const serverName = "cm"
 
+// bridgeTimeoutMS lifts 2.1.322's 60 s http MCP request timeout and its idle
+// watchdog for the bridge, which answers only when a tool returns (agent verify
+// runs 10 min), to the CLI's default 1e8 ms call cap; Run's ctx bounds tools.
+const bridgeTimeoutMS = 100_000_000
+
 // droppedEnv are removed from the child env: a stray API key, endpoint or
 // provider switch silently overrides the subscription token. The names are the
 // ones 2.1.322 reads; checkAccount catches any it adds later.
@@ -41,6 +46,7 @@ type mcpServerEntry struct {
 	Type    string            `json:"type"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers,omitempty"`
+	Timeout int64             `json:"timeout,omitempty"` // ms
 }
 
 type hookEntry struct {
@@ -73,7 +79,7 @@ func buildInvocation(s Spec, bi bridgeInfo, runDir string, session bool) (args [
 
 	servers := map[string]mcpServerEntry{}
 	if bi.Server.URL != "" {
-		servers[serverName] = mcpServerEntry{Type: "http", URL: bi.Server.URL, Headers: bi.Server.Headers}
+		servers[serverName] = mcpServerEntry{Type: "http", URL: bi.Server.URL, Headers: bi.Server.Headers, Timeout: bridgeTimeoutMS}
 	}
 
 	for _, m := range s.MCPServers {

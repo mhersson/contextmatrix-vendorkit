@@ -81,6 +81,9 @@ Events are the harness kinds, in harness order. The ones that differ:
   reported. An answer without `account` proceeds.
 - Stopping a run goes through an http stop hook on the loopback bridge, not
   signals alone.
+- The bridge's `--mcp-config` entry carries a per-server `timeout` of 1e8 ms.
+  Without it 2.1.322 cuts a bridged call at 60 s, since the bridge answers only
+  when the tool returns.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
   tool starts children with `setsid`, which leaves that group; on Linux
   `subproc` kills such escaped descendants before the SIGKILL escalation. On

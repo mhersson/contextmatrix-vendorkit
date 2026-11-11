@@ -6,6 +6,8 @@ Usage: mock.py PORT LOG SCENARIO [TOOL_INPUT_JSON [HOLD_FILE]]
   SCENARIO text: every streamed call answers "ok" and ends the turn.
   SCENARIO bash: when the last user turn is not a tool_result, answer one Bash tool_use with
                  TOOL_INPUT_JSON; after a tool_result, answer "done" and end the turn.
+  SCENARIO idle: with mcp__cm__sleep in the request's tools, one sleep call; after its
+                 tool_result, answer "done" and end the turn.
   SCENARIO smoke: for claudecode's smoke tests, by the request's tools. With mcp__cm__finish:
                  finish {} (refused), then finish with commit_message and summary, then "all done"
                  (the stop hook should end the run before it). With Bash: one Bash tool_use whose
@@ -30,6 +32,7 @@ TOOL_INPUT = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 HOLD = sys.argv[5] if len(sys.argv) > 5 else ""
 MAX_TOOL_ANSWERS = 6  # guard against a tool loop when a probe goes wrong
 FINISH = "mcp__cm__finish"
+SLEEP = "mcp__cm__sleep"
 FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
 SLEEPER = {"command": "sh -c 'echo $$ > bash.pid; exec sleep 300'", "description": "Sleep"}
 MARKERS = ["MARKER-REPLACE-7f3a", "MARKER-APPEND-7f3a"]
@@ -62,6 +65,9 @@ def tool_answer(body, n):
     msgs = body.get("messages", [])
     if SCENARIO == "bash":
         return ("Bash", TOOL_INPUT) if not last_is_tool_result(msgs) and n <= MAX_TOOL_ANSWERS else None
+    if SCENARIO == "idle":
+        names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
+        return (SLEEP, {}) if SLEEP in names and tool_results(msgs) == 0 else None
     if SCENARIO == "smoke":
         names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
         done = tool_results(msgs)
@@ -164,7 +170,7 @@ class H(BaseHTTPRequestHandler):
                 "type": "input_json_delta", "partial_json": json.dumps(answer[1])}}))
             stop = "tool_use"
         else:
-            text = {"bash": "done", "smoke": "all done"}.get(SCENARIO, "ok")
+            text = {"bash": "done", "idle": "done", "smoke": "all done"}.get(SCENARIO, "ok")
             w(sse("content_block_start", {"type": "content_block_start", "index": 0,
                                           "content_block": {"type": "text", "text": ""}}))
             w(sse("content_block_delta", {"type": "content_block_delta", "index": 0,

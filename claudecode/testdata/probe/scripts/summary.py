@@ -153,3 +153,28 @@ for name in ["oauth", "oauth-key", "oauth-bedrock", "oauth-mantle", "oauth-simpl
     print(f"{name}: account={cr[0]['response'].get('response', {}).get('account') if cr else None}")
 reqs = [q for q in jl(f"{S}/mock/account/both/requests.jsonl") if (q.get("params") or {}).get("stream")]
 print("both: authorization", {q.get("authorization") for q in reqs}, "x-api-key", {q.get("x_api_key") for q in reqs})
+
+section("MCP tool idle timeout")
+for d in sorted(glob.glob(f"{S}/mock/idle-*/*/")):
+    name = os.path.relpath(d, f"{S}/mock").rstrip("/")
+    if name.endswith("/work"):
+        continue
+    t = {}
+    for row in open(f"{d}/timing.txt", encoding="utf-8") if os.path.exists(f"{d}/timing.txt") else []:
+        sec, _, rest = row.strip().partition(" ")
+        # The idle scenario's first assistant line is the sleep call, the first user line its result.
+        if rest.startswith('{"type":"assistant"') and "tool_use" not in t:
+            t["tool_use"] = float(sec)
+        if rest.startswith('{"type":"user"') and "tool_result" not in t:
+            t["tool_result"] = float(sec)
+    took = round(t["tool_result"] - t["tool_use"], 1) if len(t) == 2 else None
+    lines = jl(f"{d}/stdout.jsonl")
+    tr = [c for x in lines if x.get("type") == "user" and isinstance(x["message"].get("content"), list)
+          for c in x["message"]["content"] if c.get("type") == "tool_result"]
+    first = tr[0] if tr else {}
+    content = first.get("content")
+    if isinstance(content, list):
+        content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
+    calls = [c for c in jl(f"{d}/mcp-calls.jsonl") if c.get("method", "").startswith(("tools/call", "notifications/cancelled"))]
+    print(f"{name}: tool_result after={took}s is_error={first.get('is_error')} content={str(content)[:110]!r} "
+          f"result={(result(lines) or {}).get('subtype')} server={[(c['method'], c.get('delivered')) for c in calls]}")
