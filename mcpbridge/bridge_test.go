@@ -294,6 +294,41 @@ func TestBridgeClose(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBridgeCloseWaitsForToolCalls(t *testing.T) {
+	started := make(chan struct{})
+
+	var returned atomic.Bool
+
+	reg := tools.NewRegistry(fixture{
+		name: "slow", desc: "cleans up after its cancel",
+		exec: func(ctx context.Context, _ map[string]any) (tools.Result, error) {
+			close(started)
+			<-ctx.Done()
+
+			time.Sleep(200 * time.Millisecond)
+			returned.Store(true)
+
+			return tools.Result{}, ctx.Err()
+		},
+	})
+
+	b := startBridge(t, reg)
+	sess := connect(t, b)
+
+	go func() {
+		_, _ = sess.CallTool(t.Context(), &mcp.CallToolParams{Name: "slow"})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tool never started")
+	}
+
+	require.NoError(t, b.Close())
+	assert.True(t, returned.Load(), "Close returned while a tool call was still executing")
+}
+
 func TestBridgeNilRegistry(t *testing.T) {
 	b := startBridge(t, nil)
 	assert.Empty(t, b.Tools())

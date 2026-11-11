@@ -14,6 +14,9 @@ import (
 // postTerminalResult answers a call made after a terminal call was accepted.
 const postTerminalResult = "unexecuted: an earlier call in this batch ended the run"
 
+// closedResult answers a call that arrives while the bridge closes.
+const closedResult = "unexecuted: the run is ending"
+
 var emptyObjectSchema = json.RawMessage(`{"type":"object"}`)
 
 func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.Tool, schema json.RawMessage) {
@@ -24,6 +27,12 @@ func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.To
 
 	server.AddTool(&mcp.Tool{Name: t.Name(), Description: fn.Description, InputSchema: schema},
 		func(reqCtx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if !b.beginCall() {
+				return errorResult(closedResult), nil
+			}
+
+			defer b.inflight.Done()
+
 			// Tool context carries the run's values and cancellation; it also
 			// ends with the request, never the bare HTTP context.
 			ctx, cancel := context.WithCancel(runCtx)

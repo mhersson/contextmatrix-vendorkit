@@ -323,7 +323,7 @@ func TestSpecValidate(t *testing.T) {
 }
 
 func TestNormalizeEffort(t *testing.T) {
-	for _, v := range EffortValues {
+	for _, v := range effortValues() {
 		assert.Equal(t, v, NormalizeEffort(v))
 		assert.Equal(t, v, NormalizeEffort("  "+strings.ToUpper(v)+" "))
 	}
@@ -377,6 +377,12 @@ func TestUserMessage(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"},`+
 		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]}}`, string(got))
+
+	got, err = userMessage("", []llm.ImageURL{{URL: "data:image/png;base64,QUJD"}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"user","message":{"role":"user","content":[`+
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUJD"}}]}}`, string(got),
+		"an image-only message carries no text block")
 
 	for _, bad := range []string{"https://x/y.png", "data:image/png,QUJD", "data:;base64,QUJD", "data:image/png;base64,"} {
 		_, err = userMessage("hi", []llm.ImageURL{{URL: bad}})

@@ -14,8 +14,8 @@ import (
 	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 )
 
-// EffortValues are the --effort levels Version accepts.
-var EffortValues = []string{"low", "medium", "high", "xhigh", "max"}
+// effortValues are the --effort levels Version accepts.
+func effortValues() []string { return []string{"low", "medium", "high", "xhigh", "max"} }
 
 // Spec configures one Run or Session process.
 type Spec struct {
@@ -23,7 +23,7 @@ type Spec struct {
 	Dir        string   // working directory of the run
 	Home       string   // HOME for the commands the Bash built-in runs; required; may be long-lived and shared by concurrent runs; vendorkit keeps its own state under Home/.vendorkit and touches nothing else
 	OAuthToken string   // becomes CLAUDE_CODE_OAUTH_TOKEN in the child env only; required
-	Env        []string // base env (KEY=VALUE) for claude and the commands its Bash tool runs
+	Env        []string // base env (KEY=VALUE) for claude and the commands its Bash tool runs, minus the variables that move a run off the subscription; nil = only what vendorkit sets (HOME, CLAUDE_CONFIG_DIR, the token, DISABLE_AUTOUPDATER), so no PATH: pass at least PATH
 
 	Model      string         // Claude Code model ID
 	Task       string         // first user message, written to stdin, never argv (Run only)
@@ -66,7 +66,7 @@ type Spec struct {
 // comes back "".
 func NormalizeEffort(e string) string {
 	e = strings.ToLower(strings.TrimSpace(e))
-	if slices.Contains(EffortValues, e) {
+	if slices.Contains(effortValues(), e) {
 		return e
 	}
 
@@ -88,7 +88,7 @@ func (s Spec) validate(session bool) error {
 	case s.SessionID != "" && s.Resume != "":
 		return errors.New("claudecode: at most one of Spec.SessionID and Spec.Resume may be set")
 	case s.Effort != "" && NormalizeEffort(s.Effort) != s.Effort:
-		return fmt.Errorf("claudecode: Spec.Effort %q is not one of %v", s.Effort, EffortValues)
+		return fmt.Errorf("claudecode: Spec.Effort %q is not one of %v", s.Effort, effortValues())
 	case session && s.Task != "":
 		return errors.New("claudecode: Spec.Task is unused by a Session; send it with Send")
 	}

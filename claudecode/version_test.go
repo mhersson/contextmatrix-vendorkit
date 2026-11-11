@@ -43,6 +43,18 @@ func TestCheckVersion(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("empty binary is claude on PATH", func(t *testing.T) {
+		dir := t.TempDir()
+		script := "#!/bin/sh\necho '" + Version + " (Claude Code)'\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700))
+		t.Setenv("PATH", dir)
+
+		found, tested, err := CheckVersion(ctx, "")
+		require.NoError(t, err)
+		assert.Equal(t, Version, found)
+		assert.True(t, tested)
+	})
+
 	t.Run("missing binary", func(t *testing.T) {
 		_, _, err := CheckVersion(ctx, filepath.Join(t.TempDir(), "no-such-claude"))
 		require.Error(t, err)

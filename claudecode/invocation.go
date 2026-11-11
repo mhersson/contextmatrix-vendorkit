@@ -192,9 +192,13 @@ type inputImage struct {
 	Data      string `json:"data"`
 }
 
-// userMessage renders one stream-json user line, newline-terminated.
+// userMessage renders one stream-json user line, newline-terminated. Images
+// with no text go without a text block, which would carry no text field.
 func userMessage(text string, images []llm.ImageURL) ([]byte, error) {
-	blocks := []inputBlock{{Type: "text", Text: text}}
+	var blocks []inputBlock
+	if text != "" || len(images) == 0 {
+		blocks = append(blocks, inputBlock{Type: "text", Text: text})
+	}
 
 	for _, img := range images {
 		rest, ok := strings.CutPrefix(img.URL, "data:")

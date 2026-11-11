@@ -38,4 +38,8 @@ func TestSplitRegistry(t *testing.T) {
 	b, br := SplitRegistry(nil)
 	assert.Empty(t, b)
 	assert.Nil(t, br)
+
+	b, br = SplitRegistry(tools.NewRegistry(tools.NewReadTool(root), tools.NewBashTool(root)))
+	assert.Equal(t, []string{"Read", "Bash"}, b)
+	assert.Nil(t, br, "nothing left to bridge must start no bridge")
 }

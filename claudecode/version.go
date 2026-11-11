@@ -18,17 +18,22 @@ const Version = "2.1.322"
 
 const versionTimeout = 10 * time.Second
 
-// CheckVersion runs `<binary> --version` and returns the version it reports
-// and whether that equals Version. A mismatch is never an error and never
-// fails a run: callers log one warning naming both versions and carry on. err
-// is set only when the binary cannot be run or prints no version.
+// CheckVersion runs `<binary> --version` ("" = "claude" on PATH, as
+// Spec.Binary) and returns the version it reports and whether that equals
+// Version. A mismatch is never an error and never fails a run: callers log one
+// warning naming both versions and carry on. err is set only when the binary
+// cannot be run or prints no version.
 func CheckVersion(ctx context.Context, binary string) (found string, tested bool, err error) {
+	if binary == "" {
+		binary = "claude"
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
 	defer cancel()
 
 	out, err := exec.CommandContext(ctx, binary, "--version").Output() //nolint:gosec // the caller names the claude binary
 	if err != nil {
-		return "", false, fmt.Errorf("run %s --version: %w", binary, err)
+		return "", false, fmt.Errorf("claudecode: run %s --version: %w", binary, err)
 	}
 
 	fields := strings.Fields(string(out))

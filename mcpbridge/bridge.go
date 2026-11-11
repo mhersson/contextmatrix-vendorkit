@@ -41,6 +41,10 @@ type Bridge struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	callMu   sync.Mutex
+	closing  bool
+	inflight sync.WaitGroup // tool calls still executing
+
 	termExec sync.Mutex
 	mu       sync.Mutex
 	termTool string
@@ -159,9 +163,14 @@ func (b *Bridge) HookURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/hook/%s", b.port, b.hookToken)
 }
 
-// Close stops the server and cancels in-flight tool calls. It is idempotent.
+// Close stops the server, cancels in-flight tool calls and waits for them to
+// return, so no tool runs once it does. It is idempotent.
 func (b *Bridge) Close() error {
 	b.closeOnce.Do(func() {
+		b.callMu.Lock()
+		b.closing = true
+		b.callMu.Unlock()
+
 		b.cancel()
 
 		if err := b.srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -169,9 +178,24 @@ func (b *Bridge) Close() error {
 		}
 
 		<-b.done
+		b.inflight.Wait()
 	})
 
 	return b.closeErr
+}
+
+// beginCall registers a tool call with Close; false once Close has begun.
+func (b *Bridge) beginCall() bool {
+	b.callMu.Lock()
+	defer b.callMu.Unlock()
+
+	if b.closing {
+		return false
+	}
+
+	b.inflight.Add(1)
+
+	return true
 }
 
 func (b *Bridge) requireBearer(next http.Handler) http.Handler {
