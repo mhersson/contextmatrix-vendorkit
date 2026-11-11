@@ -49,10 +49,16 @@ type initAccount struct {
 
 // checkAccount fails closed on an account other than the OAuth token on the
 // first-party API. 2.1.322 reports an API key that outranks the token as
-// apiKeySource beside tokenSource. No account (another release) passes.
-func (o runOpts) checkAccount(a *initAccount) error {
-	if a == nil || o.anyAccount {
+// apiKeySource beside tokenSource. No account (another release) passes; one
+// that cannot be read fails.
+func (o runOpts) checkAccount(raw json.RawMessage) error {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || o.anyAccount {
 		return nil
+	}
+
+	a := &initAccount{}
+	if err := json.Unmarshal(raw, a); err != nil {
+		return fmt.Errorf("%w (unreadable account: %w)", errNotSubscription, err)
 	}
 
 	if a.TokenSource == "CLAUDE_CODE_OAUTH_TOKEN" && a.APIProvider == "firstParty" &&
@@ -342,8 +348,8 @@ func initRequest(id string) []byte {
 }
 
 // initResponse reports whether line answers initialize request id, and the
-// account it reports (nil when absent).
-func initResponse(line []byte, id string) (*initAccount, bool) {
+// account it reports, undecoded so a changed shape still ends the gate.
+func initResponse(line []byte, id string) (json.RawMessage, bool) {
 	if !bytes.Contains(line, []byte(`"control_response"`)) {
 		return nil, false
 	}
@@ -353,7 +359,7 @@ func initResponse(line []byte, id string) (*initAccount, bool) {
 		Response struct {
 			RequestID string `json:"request_id"`
 			Response  struct {
-				Account *initAccount `json:"account"`
+				Account json.RawMessage `json:"account"`
 			} `json:"response"`
 		} `json:"response"`
 	}

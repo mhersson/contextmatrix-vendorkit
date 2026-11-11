@@ -82,7 +82,8 @@ Events are the harness kinds, in harness order. The ones that differ:
   When the answer carries an `account`, the start fails closed unless it
   reports `tokenSource: "CLAUDE_CODE_OAUTH_TOKEN"`, `apiProvider:
   "firstParty"` and no API key source; the error names what Claude Code
-  reported. An answer without `account` proceeds.
+  reported. An `account` whose fields cannot be read fails the same way. An
+  answer without `account` proceeds.
 - Stopping a run goes through an http stop hook on the loopback bridge, not
   signals alone.
 - The bridge's `--mcp-config` entry carries a per-server `timeout` of 1e8 ms.
@@ -122,7 +123,9 @@ Moving `Version`:
    API with dummy credentials. They skip unless `VENDORKIT_SMOKE_CLAUDE` (the
    binary) and `VENDORKIT_SMOKE_MOCK` (the mock's base URL) are set;
    `smoke.sh` sets both and must run inside `jail.sh`, a network namespace
-   with only loopback up:
+   with only loopback up. `SCRATCH` must start as an empty directory, and the
+   binary comes from `install.sh` there or from `CLAUDE` (see
+   `claudecode/testdata/README.md`):
 
    ```bash
    go test -c -o "$SCRATCH/claudecode.test" ./claudecode

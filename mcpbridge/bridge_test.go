@@ -287,11 +287,27 @@ func TestBridgeClose(t *testing.T) {
 
 	addr := strings.TrimSuffix(strings.TrimPrefix(b.Config().URL, "http://"), "/mcp")
 
+	// A connection made before Close is this bridge's, whatever later reuses
+	// the port, so the check cannot pass against another listener.
+	var d net.Dialer
+
+	conn, err := d.DialContext(t.Context(), "tcp", addr)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = conn.Close() })
+
 	require.NoError(t, b.Close())
 	require.NoError(t, b.Close())
 
-	_, err = net.DialTimeout("tcp", addr, time.Second)
-	assert.Error(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+
+	_, err = conn.Read(make([]byte, 1))
+	require.Error(t, err)
+
+	var ne net.Error
+	if errors.As(err, &ne) {
+		assert.False(t, ne.Timeout(), "the bridge still holds the connection open after Close")
+	}
 }
 
 func TestBridgeCloseWaitsForToolCalls(t *testing.T) {
@@ -477,4 +493,38 @@ func TestBridgeConcurrentTerminalCalls(t *testing.T) {
 	_, args, ok := b.Terminal()
 	require.True(t, ok)
 	assert.JSONEq(t, `{"m":"a"}`, string(args))
+}
+
+func TestToResultContent(t *testing.T) {
+	kinds := func(r *mcp.CallToolResult) []string {
+		var out []string
+
+		for _, c := range r.Content {
+			switch v := c.(type) {
+			case *mcp.TextContent:
+				out = append(out, "text:"+v.Text)
+			case *mcp.ImageContent:
+				out = append(out, "image:"+v.MIMEType)
+			default:
+				out = append(out, "other")
+			}
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name string
+		in   tools.Result
+		want []string
+	}{
+		{"text and image", tools.Result{Text: "see", Images: []llm.ImageURL{{URL: picURL}}}, []string{"text:see", "image:image/png"}},
+		{"image only", tools.Result{Images: []llm.ImageURL{{URL: picURL}}}, []string{"image:image/png"}},
+		{"malformed image only", tools.Result{Images: []llm.ImageURL{{URL: "not-a-data-url"}}}, []string{"text:[image omitted: unsupported or malformed image URL]"}},
+		{"empty", tools.Result{}, []string{"text:"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, kinds(toResult(tc.in)))
+		})
+	}
 }

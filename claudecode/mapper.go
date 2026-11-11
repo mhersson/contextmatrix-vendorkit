@@ -682,7 +682,10 @@ func (m *mapper) closeCall() {
 		m.callIDs[tc.ID] = false
 	}
 
-	m.messages = append(m.messages, am)
+	// A thinking-only call leaves nothing a provider accepts as a history turn.
+	if am.Content != "" || len(am.ToolCalls) > 0 {
+		m.messages = append(m.messages, am)
+	}
 
 	for _, t := range c.tools {
 		m.toolNames[t.id] = t.name
