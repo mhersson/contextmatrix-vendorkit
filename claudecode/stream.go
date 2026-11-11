@@ -13,6 +13,13 @@ type streamLine struct {
 	Subtype  string `json:"subtype"`
 	IsReplay bool   `json:"isReplay"`
 
+	Error string `json:"error"` // assistant: authentication_failed, ...
+
+	// system/init
+	SessionID         string      `json:"session_id"`
+	ClaudeCodeVersion string      `json:"claude_code_version"`
+	MCPServers        []mcpServer `json:"mcp_servers"`
+
 	Message *apiMessage `json:"message"` // assistant, user
 
 	Event        *streamEvent `json:"event"` // stream_event
@@ -22,6 +29,7 @@ type streamLine struct {
 
 	// result
 	IsError                   bool                  `json:"is_error"`
+	APIErrorStatus            *int                  `json:"api_error_status"`
 	Result                    string                `json:"result"`
 	Errors                    []string              `json:"errors"`
 	NumTurns                  int                   `json:"num_turns"`
@@ -30,6 +38,11 @@ type streamLine struct {
 	Usage                     apiUsage              `json:"usage"`
 	ModelUsage                map[string]modelUsage `json:"modelUsage"`
 	ModelUsageSinceLastResult map[string]modelUsage `json:"model_usage_since_last_result"`
+}
+
+type mcpServer struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
 type apiMessage struct {

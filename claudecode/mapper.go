@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
@@ -152,8 +153,18 @@ type mapper struct {
 
 	sawResult bool
 	finished  bool
-	res       harness.Result
-	err       error
+
+	halted     bool // a stop condition was seen; later lines are ignored
+	backstop   bool
+	limit      *UsageLimitError
+	authFailed bool
+	bridgeErr  error
+	lastRL     RateLimit
+
+	sid     string
+	version string // claude_code_version from init
+	res     harness.Result
+	err     error
 }
 
 func newMapper(o mapperOpts) *mapper {
@@ -169,6 +180,10 @@ func newMapper(o mapperOpts) *mapper {
 // feed consumes one stream-json line. Lines the mapper does not know, or that
 // are not JSON, are ignored.
 func (m *mapper) feed(line []byte) verdict {
+	if m.halted {
+		return stopNow
+	}
+
 	if m.sawResult || m.finished {
 		return m.afterResult()
 	}
@@ -180,6 +195,10 @@ func (m *mapper) feed(line []byte) verdict {
 
 	switch l.Type {
 	case "assistant":
+		if l.Error == "authentication_failed" {
+			m.authFailed = true
+		}
+
 		m.onAssistant(l.Message)
 	case "user":
 		if !l.IsReplay {
@@ -190,7 +209,10 @@ func (m *mapper) feed(line []byte) verdict {
 	case "rate_limit_event":
 		m.onRateLimit(l.RateLimitInfo)
 	case "system":
-		if l.Subtype == "compact_boundary" {
+		switch l.Subtype {
+		case "init":
+			m.onInit(l)
+		case "compact_boundary":
 			m.emit(events.StateChange, map[string]any{"event": "compaction"})
 		}
 	case "result":
@@ -199,7 +221,32 @@ func (m *mapper) feed(line []byte) verdict {
 		return m.afterResult()
 	}
 
+	if m.halted {
+		return stopNow
+	}
+
 	return keepGoing
+}
+
+// sessionID is the session_id init reported; "" before init.
+func (m *mapper) sessionID() string { return m.sid }
+
+func (m *mapper) onInit(l streamLine) {
+	m.sid = l.SessionID
+	m.version = l.ClaudeCodeVersion
+
+	// "mcp__cm__" names the server "cm".
+	server := strings.TrimSuffix(strings.TrimPrefix(m.o.Prefix, "mcp__"), "__")
+	if server == "" {
+		return
+	}
+
+	for _, s := range l.MCPServers {
+		if s.Name == server && s.Status == "failed" {
+			m.bridgeErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP bridge server %q failed to start", server)))
+			m.halted = true
+		}
+	}
 }
 
 // afterResult: a Run's unit of work is over at its result; a Session turn's
@@ -236,6 +283,15 @@ func (m *mapper) finish(procErr error) (harness.Result, error) {
 	m.res.Output = m.mask(m.lastText)
 
 	switch {
+	case m.limit != nil:
+		m.conclude("error", m.limit)
+	case m.bridgeErr != nil:
+		m.conclude("error", m.bridgeErr)
+	case m.backstop:
+		// vendorkit stopped the process itself, so procErr says nothing.
+		m.conclude("done", nil)
+	case m.authFailed:
+		m.conclude("error", m.notLoggedIn(""))
 	case errors.Is(procErr, context.Canceled) || errors.Is(procErr, context.DeadlineExceeded):
 		m.conclude("canceled", m.wrap("claudecode: run canceled", procErr))
 	case procErr != nil:
@@ -245,6 +301,16 @@ func (m *mapper) finish(procErr error) (harness.Result, error) {
 	}
 
 	return m.res, m.err
+}
+
+// notLoggedIn keeps ErrNotLoggedIn matchable with errors.Is.
+func (m *mapper) notLoggedIn(detail string) error {
+	text := ErrNotLoggedIn.Error()
+	if detail != "" {
+		text += ": " + detail
+	}
+
+	return &maskedError{text: m.mask(text), err: ErrNotLoggedIn}
 }
 
 func (m *mapper) wrap(msg string, err error) error {
@@ -308,6 +374,17 @@ func (m *mapper) callFor(id, model string) *apiCall {
 	}
 
 	m.closeCall()
+
+	// After an accepted terminal call, a new API call means the model ignored
+	// the end of the run.
+	if !m.o.Session && m.o.Terminal != nil {
+		if _, _, ok := m.o.Terminal(); ok {
+			m.backstop = true
+			m.halted = true
+
+			return nil
+		}
+	}
 
 	m.calls++
 	m.open = &apiCall{id: id, model: model, turn: m.calls, toolOfBlock: map[int]int{}}
@@ -478,6 +555,7 @@ func (m *mapper) onUser(msg *apiMessage) {
 
 func (m *mapper) onRateLimit(info *rateLimitInfo) {
 	rl := parseRateLimit(info)
+	m.lastRL = rl
 
 	// Keep the last known windows: an event without any says nothing new.
 	if len(rl.Windows) > 0 {
@@ -487,6 +565,15 @@ func (m *mapper) onRateLimit(info *rateLimitInfo) {
 	if m.o.OnRateLimit != nil {
 		m.o.OnRateLimit(rl)
 	}
+
+	if rl.Status == "rejected" {
+		m.limit = m.usageLimit(rl)
+		m.halted = true
+	}
+}
+
+func (m *mapper) usageLimit(rl RateLimit) *UsageLimitError {
+	return &UsageLimitError{Window: m.mask(rl.Window), ResetsAt: rl.ResetsAt}
 }
 
 // closeCall emits the open call's events in harness order.
@@ -584,6 +671,13 @@ func (m *mapper) onResult(l streamLine) {
 // subtype success.
 func (m *mapper) outcome(l streamLine) (string, error) {
 	switch {
+	case m.authFailed || (l.IsError && strings.HasPrefix(l.Result, "Not logged in")):
+		return "error", m.notLoggedIn(l.Result)
+	case l.IsError && l.APIErrorStatus != nil && *l.APIErrorStatus == 429 &&
+		strings.Contains(strings.ToLower(l.Result), "usage limit"):
+		m.limit = m.usageLimit(m.lastRL)
+
+		return "error", m.limit
 	case l.Subtype == "error_max_turns":
 		return "max_turns", nil
 	case l.Subtype == "error_max_budget_usd":
@@ -613,7 +707,7 @@ func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
 	m.res.Completed = reason == "done"
 	m.res.ModelUsed = m.maskSecret(m.res.ModelUsed)
-	m.err = err
+	m.err = m.annotate(reason, err)
 
 	if m.res.Completed && m.o.Terminal != nil {
 		if _, args, ok := m.o.Terminal(); ok {
@@ -621,8 +715,15 @@ func (m *mapper) conclude(reason string, err error) {
 		}
 	}
 
-	if reason == "error" && err != nil {
-		m.emit(events.ErrorKind, map[string]any{"error": err.Error()})
+	if m.limit != nil {
+		data := map[string]any{"window": m.limit.Window}
+		if !m.limit.ResetsAt.IsZero() {
+			data["resets_at"] = m.limit.ResetsAt.Format(time.RFC3339)
+		}
+
+		m.emit(events.Kind("usage_limit"), data)
+	} else if reason == "error" && m.err != nil {
+		m.emit(events.ErrorKind, map[string]any{"error": m.err.Error()})
 	}
 
 	switch {
@@ -631,6 +732,19 @@ func (m *mapper) conclude(reason string, err error) {
 	case m.sawResult:
 		m.emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": m.res.Turns})
 	}
+}
+
+// annotate names both versions on an error from an untested release. Typed
+// outcomes (login, usage limit) and cancellation need no version context.
+func (m *mapper) annotate(reason string, err error) error {
+	var ule *UsageLimitError
+
+	if err == nil || reason != "error" || m.version == "" || m.version == Version ||
+		errors.Is(err, ErrNotLoggedIn) || errors.As(err, &ule) {
+		return err
+	}
+
+	return &maskedError{text: err.Error() + m.mask(fmt.Sprintf(" (claude %s, tested %s)", m.version, Version)), err: err}
 }
 
 func deref(v *int64) int64 {

@@ -44,6 +44,13 @@ func replay(t *testing.T, path string, o mapperOpts) ([]events.Event, harness.Re
 func replayData(t *testing.T, data []byte, o mapperOpts, procErr error) ([]events.Event, harness.Result, error) {
 	t.Helper()
 
+	return replayHook(t, data, o, procErr, nil)
+}
+
+// replayHook calls before ahead of each line fed.
+func replayHook(t *testing.T, data []byte, o mapperOpts, procErr error, before func(line []byte)) ([]events.Event, harness.Result, error) {
+	t.Helper()
+
 	var transcript bytes.Buffer
 
 	o.Emitter = events.NewEmitter(nil, &transcript)
@@ -51,6 +58,10 @@ func replayData(t *testing.T, data []byte, o mapperOpts, procErr error) ([]event
 
 	for line := range bytes.Lines(data) {
 		if line = bytes.TrimSpace(line); len(line) > 0 {
+			if before != nil {
+				before(line)
+			}
+
 			m.feed(line)
 		}
 	}
@@ -539,15 +550,18 @@ func TestMapperMasksSecret(t *testing.T) {
 
 		var deltas []llm.Delta
 
-		evs, res, err := replayData(t, data, mapperOpts{
+		// The terminal call is accepted at the end, so no new call trips the backstop.
+		accepted := false
+
+		evs, res, err := replayHook(t, data, mapperOpts{
 			Prefix:  cmlocal,
 			Secret:  secret,
 			Redact:  redact,
 			OnDelta: func(d llm.Delta) { deltas = append(deltas, d) },
 			Terminal: func() (string, json.RawMessage, bool) {
-				return "finish", json.RawMessage(`{"summary":"` + secret + `"}`), true
+				return "finish", json.RawMessage(`{"summary":"` + secret + `"}`), accepted
 			},
-		}, nil)
+		}, nil, func(line []byte) { accepted = accepted || bytes.Contains(line, []byte(`"type":"result"`)) })
 		require.NoError(t, err)
 
 		transcript, err := json.Marshal(evs)
@@ -918,4 +932,255 @@ func TestMapperRateLimits(t *testing.T) {
 		assert.Equal(t, "allowed", w["status"])
 		assert.Equal(t, resetsAt.Format(time.RFC3339), w["resets_at"])
 	})
+}
+
+// feedUntilStop feeds lines the way the supervisor does: it stops at the first
+// stopNow. before runs ahead of each line.
+func feedUntilStop(t *testing.T, data []byte, o mapperOpts, procErr error, before func(line []byte)) (stopped bool, evs []events.Event, res harness.Result, err error) {
+	t.Helper()
+
+	var transcript bytes.Buffer
+
+	o.Emitter = events.NewEmitter(nil, &transcript)
+	m := newMapper(o)
+
+	for line := range bytes.Lines(data) {
+		if line = bytes.TrimSpace(line); len(line) == 0 {
+			continue
+		}
+
+		if before != nil {
+			before(line)
+		}
+
+		if m.feed(line) == stopNow {
+			stopped = true
+
+			break
+		}
+	}
+
+	res, err = m.finish(procErr)
+
+	return stopped, decodeEvents(t, transcript.Bytes()), res, err
+}
+
+func TestMapperRateLimitEvent(t *testing.T) {
+	resetsAt := time.Unix(1794510000, 0).UTC()
+
+	var got []RateLimit
+
+	evs, _, err := replay(t, "real/t1.jsonl", mapperOpts{OnRateLimit: func(r RateLimit) { got = append(got, r) }})
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "allowed", got[0].Status)
+	assert.Equal(t, "seven_day", got[0].Window)
+	assert.True(t, resetsAt.Equal(got[0].ResetsAt))
+	require.Len(t, got[0].Windows, 1)
+	assert.Equal(t, "seven_day", got[0].Windows[0].Window)
+	assert.InDelta(t, 0.13, got[0].Windows[0].Utilization, 1e-9)
+	assert.Equal(t, "allowed", got[0].Windows[0].Status)
+	assert.True(t, resetsAt.Equal(got[0].Windows[0].ResetsAt))
+
+	usages := ofKind(evs, events.UsageKind)
+	require.Len(t, usages, 1)
+
+	sub, ok := usages[0].Data["subscription"].([]any)
+	require.True(t, ok)
+	require.Len(t, sub, 1)
+
+	w, ok := sub[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, resetsAt.Format(time.RFC3339), w["resets_at"])
+}
+
+func TestMapperUsageLimit(t *testing.T) {
+	resetsAt := time.Unix(1794510000, 0).UTC()
+
+	stopped, evs, res, err := feedUntilStop(t, readFixture(t, "synthetic/rejected.jsonl"), mapperOpts{},
+		errors.New("signal: terminated"), nil)
+	require.True(t, stopped, "the rejected line stops the process at once")
+
+	var ule *UsageLimitError
+
+	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "seven_day", ule.Window)
+	assert.True(t, resetsAt.Equal(ule.ResetsAt))
+
+	assert.False(t, res.Completed)
+	assert.Equal(t, "error", res.Reason)
+	assert.Equal(t, buckets{2, 4, 11382, 6379}, resultBuckets(res), "usage streamed so far")
+
+	limits := ofKind(evs, events.Kind("usage_limit"))
+	require.Len(t, limits, 1)
+	assert.Equal(t, map[string]any{"window": "seven_day", "resets_at": resetsAt.Format(time.RFC3339)}, limits[0].Data)
+
+	assert.Empty(t, ofKind(evs, events.ErrorKind), "the usage_limit event is the report")
+
+	last := evs[len(evs)-1]
+	assert.Equal(t, events.StateChange, last.Kind)
+	assert.Equal(t, "error", last.Data["stop"])
+	assert.Equal(t, events.Kind("usage_limit"), evs[len(evs)-2].Kind)
+	assert.Len(t, stops(evs), 1)
+}
+
+func TestMapperUsageLimitUnknownReset(t *testing.T) {
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}` + "\n"
+
+	stopped, evs, _, err := feedUntilStop(t, []byte(line), mapperOpts{}, nil, nil)
+	require.True(t, stopped)
+
+	var ule *UsageLimitError
+
+	require.ErrorAs(t, err, &ule)
+	assert.True(t, ule.ResetsAt.IsZero())
+
+	limits := ofKind(evs, events.Kind("usage_limit"))
+	require.Len(t, limits, 1)
+	assert.NotContains(t, limits[0].Data, "resets_at")
+}
+
+func TestMapperUsageLimitFromResult(t *testing.T) {
+	data := `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Claude AI usage limit reached","num_turns":1,"usage":{}}` + "\n"
+
+	evs, res, err := replayData(t, []byte(data), mapperOpts{}, nil)
+
+	var ule *UsageLimitError
+
+	require.ErrorAs(t, err, &ule)
+	assert.Equal(t, "error", res.Reason)
+	require.Len(t, ofKind(evs, events.Kind("usage_limit")), 1)
+	assert.Empty(t, ofKind(evs, events.ErrorKind))
+}
+
+func TestMapperNotLoggedIn(t *testing.T) {
+	evs, res, err := replay(t, "real/t2.jsonl", mapperOpts{})
+	require.ErrorIs(t, err, ErrNotLoggedIn)
+
+	assert.False(t, res.Completed, "subtype success must not count")
+	assert.Equal(t, "error", res.Reason)
+	require.Len(t, ofKind(evs, events.ErrorKind), 1)
+
+	t.Run("process dies after the assistant line", func(t *testing.T) {
+		lines := bytes.SplitAfter(readFixture(t, "real/t2.jsonl"), []byte("\n"))
+		data := bytes.Join(lines[:3], nil)
+
+		_, res, err := replayData(t, data, mapperOpts{}, errors.New("exit status 1"))
+		require.ErrorIs(t, err, ErrNotLoggedIn)
+		assert.Equal(t, "error", res.Reason)
+	})
+
+	t.Run("no version annotation", func(t *testing.T) {
+		data := rewrite(readFixture(t, "real/t2.jsonl"), `"claude_code_version":"2.1.322"`, `"claude_code_version":"2.1.400"`)
+
+		_, _, err := replayData(t, data, mapperOpts{}, nil)
+		require.ErrorIs(t, err, ErrNotLoggedIn)
+		assert.NotContains(t, err.Error(), "2.1.400")
+	})
+}
+
+func TestMapperUntestedVersionProceeds(t *testing.T) {
+	newer := func(data []byte) []byte {
+		return rewrite(data, `"claude_code_version":"2.1.322"`, `"claude_code_version":"2.1.400"`)
+	}
+
+	baseEvs, baseRes, baseErr := replay(t, "real/t1.jsonl", mapperOpts{})
+	require.NoError(t, baseErr)
+
+	evs, res, err := replayData(t, newer(readFixture(t, "real/t1.jsonl")), mapperOpts{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, kinds(baseEvs), kinds(evs))
+
+	for i := range evs {
+		assert.Equal(t, baseEvs[i].Data, evs[i].Data)
+	}
+
+	assert.Equal(t, baseRes, res)
+
+	_, _, err = replayData(t, newer(readFixture(t, "synthetic/crash.jsonl")), mapperOpts{Prefix: cmlocal}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2.1.400")
+	assert.Contains(t, err.Error(), Version)
+
+	_, _, err = replay(t, "synthetic/crash.jsonl", mapperOpts{Prefix: cmlocal})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "tested", "a matching version adds nothing")
+
+	t.Run("not on cancellation", func(t *testing.T) {
+		procErr := fmt.Errorf("%w: stop", context.Canceled)
+
+		_, res, err := replayData(t, newer(readFixture(t, "synthetic/crash.jsonl")), mapperOpts{Prefix: cmlocal}, procErr)
+		require.Error(t, err)
+		assert.Equal(t, "canceled", res.Reason)
+		assert.NotContains(t, err.Error(), "2.1.400")
+	})
+}
+
+func TestMapperBridgeFailed(t *testing.T) {
+	data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"cm","status":"failed"},{"name":"other","status":"connected"}]`)
+
+	stopped, evs, res, err := feedUntilStop(t, data, mapperOpts{Prefix: "mcp__cm__"}, errors.New("signal: killed"), nil)
+	require.True(t, stopped)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"cm"`)
+	assert.Equal(t, "error", res.Reason)
+	assert.Empty(t, ofKind(evs, events.ModelRequest), "nothing after init is processed")
+	require.Len(t, ofKind(evs, events.ErrorKind), 1)
+
+	t.Run("other servers do not stop the run", func(t *testing.T) {
+		data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"other","status":"failed"}]`)
+
+		stopped, _, _, err := feedUntilStop(t, data, mapperOpts{Prefix: "mcp__cm__"}, nil, nil)
+		require.NoError(t, err)
+		assert.True(t, stopped, "only the result stops a Run")
+	})
+}
+
+func TestMapperInitCaptures(t *testing.T) {
+	m := newMapper(mapperOpts{})
+	assert.Empty(t, m.sessionID())
+
+	line := bytes.Lines(readFixture(t, "real/t1.jsonl"))
+	for l := range line {
+		m.feed(bytes.TrimSpace(l))
+
+		break
+	}
+
+	assert.Equal(t, "e7d93133-865e-4f91-b7e2-348d66e79b59", m.sessionID())
+}
+
+func TestMapperBackstopAfterTerminal(t *testing.T) {
+	args := json.RawMessage(finishInput)
+
+	for _, tc := range []struct{ name, fixture string }{
+		{"stream events", "synthetic/partial.jsonl"},
+		{"assistant lines only", "real/t5.jsonl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			accepted := false
+
+			stopped, evs, res, err := feedUntilStop(t, readFixture(t, tc.fixture), mapperOpts{
+				Prefix: cmlocal,
+				Terminal: func() (string, json.RawMessage, bool) {
+					return "finish", args, accepted
+				},
+			}, errors.New("signal: killed"), func(line []byte) {
+				accepted = accepted || bytes.Contains(line, []byte(`"tool_result"`))
+			})
+			require.True(t, stopped, "the call after the terminal one stops the process")
+			require.NoError(t, err, "vendorkit stopped the process itself")
+
+			assert.True(t, res.Completed)
+			assert.Equal(t, "done", res.Reason)
+			assert.JSONEq(t, finishInput, string(res.CompletionArgs))
+			assert.Equal(t, 1, res.Turns)
+			assert.Empty(t, ofKind(evs, events.ErrorKind))
+
+			st := stops(evs)
+			require.Len(t, st, 1)
+			assert.Equal(t, "done", st[0].Data["stop"])
+		})
+	}
 }
