@@ -1,0 +1,7 @@
+# Binaries / test artifacts
+*.test
+*.out
+/coverage.txt
+
+# Uncommitted working docs (specs, plans, scout dossiers)
+docs/superpowers/
