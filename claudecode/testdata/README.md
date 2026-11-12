@@ -52,6 +52,7 @@ dash-encoded `projects/` key to `-scratch-spike` (`cwd`, `original_cwd`,
 | `two_models.jsonl` | `real/t5.jsonl` | `result.modelUsage` and `model_usage_since_last_result` gain a `claude-haiku-5-5` entry (350/12/0/0, `costUSD` 0.000041) that no assistant message served; `total_cost_usd` 0.0175914; `result.usage` unchanged |
 | `unknown.jsonl` | `real/t1.jsonl` | an unknown top-level type (`x_future_event`), an unknown `system` subtype (`x_future_subtype`), `x_future_field` on every known line, and unknown keys inside the assistant `message` and `result.usage` |
 | `crash.jsonl` | `real/t5.jsonl` | the `result` line removed |
+| `parallel.jsonl` | CLI output of a mock-API run (`parallel-tools.sh`), gated by `initialize` | one message with five `Bash` `tool_use` blocks (`echo one` to `echo five`), each input in three `input_json_delta` fragments 0.4 s apart. The `tool_result` of each of calls 1 to 4 arrives inside the message, right after the next block's `content_block_start`; call 5's arrives after `message_stop`. Each assistant line carries one block. Starts with the gate's `control_response`; usage values are the mock's |
 
 ## probe/
 
@@ -82,7 +83,7 @@ How they ran (`probe/scripts/`):
   PATH=<claude dir>:/usr/bin:/bin HOME=$SCRATCH/home`, cwd an empty scratch
   directory.
 - Mock-API runs: `bash-and-permissions.sh`, `flags.sh`, `gate.sh`,
-  `max-turns.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
+  `max-turns.sh`, `parallel-tools.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
   each inside `jail.sh` (a network namespace with only loopback up, so no
   request can leave the host), against `mock.py`. The child env is `env -i`
   plus `PATH`, `HOME`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CONFIG_DIR`,
@@ -142,6 +143,16 @@ How they ran (`probe/scripts/`):
   `unifiedWindows`):
   `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","isUsingOverage":false}}`
   (`probe/p6/run-a.jsonl`, OAuth).
+- A read-only `Bash` call runs as soon as its `tool_use` block ends, while
+  the message's later blocks still stream, so its `tool_result` line lands
+  inside the message (`synthetic/parallel.jsonl`).
+- A proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) carries
+  loopback requests too: with a dead proxy (`http://127.0.0.1:9`) and no
+  `NO_PROXY`, the smoke run's `init` reported the bridge `failed` ("MCP bridge
+  server cm failed to start"); with `127.0.0.1,localhost,::1` in `NO_PROXY` and
+  `no_proxy` the same run completed. The binary reads
+  `no_proxy||NO_PROXY`, so an empty form defers to the other. The smoke test's
+  `dead proxy` case re-checks it.
 - `--max-budget-usd` (`help.txt:131`) and `--replay-user-messages`
   (`help.txt:191`) are listed.
 - `init` reports a `messaging_socket_path` under `/tmp/cc-socks/`: the CLI

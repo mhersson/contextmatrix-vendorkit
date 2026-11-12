@@ -86,6 +86,12 @@ type apiCall struct {
 	deltaUsage  apiUsage
 	startUsage  apiUsage
 	lineUsage   *apiUsage // first assistant line
+	// results answer this call's tools but arrived before it closed.
+	results []contentBlock
+}
+
+func (c *apiCall) hasTool(id string) bool {
+	return slices.ContainsFunc(c.tools, func(t *toolUse) bool { return t.id == id })
 }
 
 func (c *apiCall) toolUse(id, name string) int {
@@ -549,29 +555,37 @@ func (m *mapper) onUser(msg *apiMessage) {
 		}
 	}
 
-	if len(results) == 0 {
-		return
-	}
-
-	m.closeCall()
-
+	// Claude Code runs a call's tools while its later tool_use blocks still
+	// stream, so a result can land inside the call; it waits for the close.
 	for _, r := range results {
-		if !r.IsError {
-			m.noteTerminal(r.ToolUseID)
-		}
-
-		text := toolResultText(r.Content)
-		m.appendToolMessage(m.maskSecret(r.ToolUseID), m.mask(text))
-
-		if r.IsError {
-			m.res.ToolCallFailures++
-			m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "error": m.mask(text)})
+		if m.open != nil && m.open.hasTool(r.ToolUseID) {
+			m.open.results = append(m.open.results, r)
 
 			continue
 		}
 
-		m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "output_len": len(text)})
+		// Any other result leaves the open call open: closing it would cut the
+		// message again.
+		m.onToolResult(r)
 	}
+}
+
+func (m *mapper) onToolResult(r contentBlock) {
+	if !r.IsError {
+		m.noteTerminal(r.ToolUseID)
+	}
+
+	text := toolResultText(r.Content)
+	m.appendToolMessage(m.maskSecret(r.ToolUseID), m.mask(text))
+
+	if r.IsError {
+		m.res.ToolCallFailures++
+		m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "error": m.mask(text)})
+
+		return
+	}
+
+	m.emit(events.ToolResult, map[string]any{"id": r.ToolUseID, "output_len": len(text)})
 }
 
 // noteTerminal orders the accepted terminal call by its result in the stream:
@@ -691,6 +705,10 @@ func (m *mapper) closeCall() {
 		m.toolNames[t.id] = t.name
 		m.res.ToolCallCount++
 		m.emit(events.ToolCallKind, map[string]any{"id": t.id, "name": m.toolName(t.name), "raw_args": m.mask(t.args())})
+	}
+
+	for _, r := range c.results {
+		m.onToolResult(r)
 	}
 }
 

@@ -94,31 +94,47 @@ func (s *streamLog) last(t *testing.T, typ, subtype string) map[string]any {
 
 // TestSmokeAgainstMockAPI proves the generated mcp.json and settings.json on
 // the real CLI: a refused finish keeps the run going, an accepted one ends it
-// through the http stop hook.
+// through the http stop hook. With a dead proxy in the env, the loopback mock,
+// bridge and hook must bypass it.
 func TestSmokeAgainstMockAPI(t *testing.T) {
 	binary, mockURL := smokeTarget(t)
-	spec, opts, stream := smokeRun(t, binary, mockURL)
-	spec.Task = "Finish the task."
-	spec.Tools = tools.NewRegistry(stubTool{name: "finish", terminal: true, exec: func(args map[string]any) (tools.Result, error) {
-		if s, _ := args["commit_message"].(string); s == "" {
-			return tools.Result{}, errors.New("commit_message is required")
-		}
 
-		return tools.Result{Text: `{"accepted":true}`}, nil
-	}})
+	// Port 9 has no listener inside the jail.
+	const dead = "http://127.0.0.1:9"
 
-	res, err := run(t.Context(), spec, opts)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		env  []string
+	}{
+		{"direct", nil},
+		{"dead proxy", []string{"HTTP_PROXY=" + dead, "HTTPS_PROXY=" + dead, "ALL_PROXY=" + dead}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, opts, stream := smokeRun(t, binary, mockURL)
+			spec.Env = append(spec.Env, tc.env...)
+			spec.Task = "Finish the task."
+			spec.Tools = tools.NewRegistry(stubTool{name: "finish", terminal: true, exec: func(args map[string]any) (tools.Result, error) {
+				if s, _ := args["commit_message"].(string); s == "" {
+					return tools.Result{}, errors.New("commit_message is required")
+				}
 
-	result := stream.last(t, "result", "")
-	t.Logf("init mcp_servers %v; result terminal_reason %v, num_turns %v",
-		stream.last(t, "system", "init")["mcp_servers"], result["terminal_reason"], result["num_turns"])
+				return tools.Result{Text: `{"accepted":true}`}, nil
+			}})
 
-	assert.Equal(t, "hook_stopped", result["terminal_reason"])
-	assert.True(t, res.Completed)
-	assert.Equal(t, "done", res.Reason)
-	assert.Equal(t, 1, res.ToolCallFailures)
-	assert.JSONEq(t, `{"commit_message":"feat: smoke","summary":"done"}`, string(res.CompletionArgs))
+			res, err := run(t.Context(), spec, opts)
+			require.NoError(t, err)
+
+			result := stream.last(t, "result", "")
+			t.Logf("init mcp_servers %v; result terminal_reason %v, num_turns %v",
+				stream.last(t, "system", "init")["mcp_servers"], result["terminal_reason"], result["num_turns"])
+
+			assert.Equal(t, "hook_stopped", result["terminal_reason"])
+			assert.True(t, res.Completed)
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, 1, res.ToolCallFailures)
+			assert.JSONEq(t, `{"commit_message":"feat: smoke","summary":"done"}`, string(res.CompletionArgs))
+		})
+	}
 }
 
 // TestSmokeCancelKillsBashChild cancels a run while the Bash built-in waits on

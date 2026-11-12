@@ -48,6 +48,7 @@ for r in "ABC":
 for r in "abc":
     copy(f"{SCR}/mock/snapshot/mock-{r}/requests.jsonl", f"{TD}/probe/snapshot/mock-requests-{r}.jsonl")
 copy(f"{SCR}/mock/maxturns/run/stdout.jsonl", f"{TD}/synthetic/max_turns.jsonl")
+copy(f"{SCR}/mock/parallel/run/stdout.jsonl", f"{TD}/synthetic/parallel.jsonl")
 
 t1 = lines(f"{TD}/real/t1.jsonl")
 t5 = lines(f"{TD}/real/t5.jsonl")
