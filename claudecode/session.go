@@ -328,8 +328,8 @@ func (s *Session) read() {
 
 		switch {
 		case v == stopNow || t.m.limit != nil:
-			// A usage limit, from a rate_limit_event or the result, or a failed
-			// bridge server stops the process; the end path finishes the turn.
+			// A usage limit, from a rate_limit_event or the result, or an MCP
+			// server reporting failed or needs-auth stops the process; the end path finishes the turn.
 			halted = true
 
 			_ = s.requestEnd("error", nil)

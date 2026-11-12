@@ -54,8 +54,8 @@ allowlist, so the vendor executor lives here.
   ContextMatrix tool installs, upgrades or changes it. `CheckVersion` reports a
   mismatch for the caller to log as a warning, and a run on an untested release
   proceeds (if it fails after init reported a version other than `Version`, the
-  error names both; a failure before init, such as a rejected flag, carries no
-  version).
+  error names both, login and usage-limit errors aside; a failure before init,
+  such as a rejected flag, carries no version).
 - Moving `Version` is a tested change: new fixtures, the CLI probes re-run, the
   opt-in smoke tests (`VENDORKIT_SMOKE_CLAUDE`, `VENDORKIT_SMOKE_MOCK`, run via
   `claudecode/testdata/probe/scripts/smoke.sh` inside `jail.sh`) and

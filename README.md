@@ -23,9 +23,9 @@ if found, tested, err := claudecode.CheckVersion(ctx, binary); err == nil && !te
 ```
 
 Check the version once at start. A mismatch is never an error and a run on an
-untested release proceeds; if it fails after init reported a version other
-than `Version`, the error names both. A failure before init, such
-as a flag the CLI rejects, carries no version.
+untested release proceeds; if it fails after init reported a version other than
+`Version`, the error names both (login and usage-limit errors aside). A failure
+before init, such as a flag the CLI rejects, carries no version.
 
 **Run** (agent phases, architect stages): split the harness registry, set the
 `Spec` and call `Run`.
@@ -105,11 +105,13 @@ Events are the harness kinds, in harness order. The ones that differ:
 - Background Bash tasks are disabled in every child (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`,
   not overridable through `Spec.Env`). A task finishing between `Session` turns
   makes 2.1.322 run an unsolicited turn that `Session` would drop or hand to an
-  overlapping `Send`; the CLI now refuses `run_in_background`.
+  overlapping `Send`; with it set, the CLI refuses `run_in_background`.
 - The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
   tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
   with a 2 KB `<persisted-output>` preview and a file path
-  instead of the result; 400,000 is above every backend's tool cap.
+  instead of the result. The bridge caps nothing itself, so each caller caps
+  its own bridged results (the architect wraps its tools at 128 KiB); a result
+  over 400,000 chars still arrives as a preview.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
   tool starts children with `setsid`, which leaves that group; on Linux
   `subproc` kills such escaped descendants before the SIGKILL escalation. On

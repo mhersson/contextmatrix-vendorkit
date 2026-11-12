@@ -19,7 +19,8 @@ const closedResult = "unexecuted: the run is ending"
 
 // maxResultSizeChars is the result size every tool declares: 2.1.322 replaces a bridged
 // result over about 50,000 chars with a 2 KB preview unless the tool declares a larger one.
-// 400,000 is the largest size probed whole, above every backend's tool cap.
+// The bridge caps nothing itself: callers cap their own results, and one over 400,000 chars
+// still becomes a preview.
 const maxResultSizeChars = 400_000
 
 // omittedImageNote replaces an image result whose URL is not a usable data URL.

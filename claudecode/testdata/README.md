@@ -156,8 +156,8 @@ How they ran (`probe/scripts/`):
   inside the message (`synthetic/parallel.jsonl`).
 - A proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) carries
   loopback requests too: with a dead proxy (`http://127.0.0.1:9`) and no
-  `NO_PROXY`, the smoke run's `init` reported the bridge `failed` ("MCP bridge
-  server cm failed to start"); with `127.0.0.1,localhost,::1` in `NO_PROXY` and
+  `NO_PROXY`, the smoke run's `init` reported the bridge server with
+  `"status":"failed"`; with `127.0.0.1,localhost,::1` in `NO_PROXY` and
   `no_proxy` the same run completed. The binary reads
   `no_proxy||NO_PROXY`, so an empty form defers to the other. The smoke test's
   `dead proxy` case re-checks it.
