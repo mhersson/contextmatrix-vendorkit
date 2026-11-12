@@ -178,7 +178,9 @@ func TestBridgeToolsDeclareResultSize(t *testing.T) {
 	for _, tl := range list.Tools {
 		size, ok := tl.Meta["anthropic/maxResultSizeChars"].(float64)
 		require.True(t, ok, "tool %s declares no result size", tl.Name)
-		assert.InDelta(t, float64(maxResultSizeChars), size, 0, tl.Name)
+		// 131072 is the largest backend tool-output cap; 400000 the largest size probed whole.
+		assert.GreaterOrEqual(t, size, float64(131072), tl.Name)
+		assert.LessOrEqual(t, size, float64(400000), tl.Name)
 	}
 }
 
