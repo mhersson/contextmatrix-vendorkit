@@ -1183,23 +1183,24 @@ func TestMapperUsageLimitResultIgnoresAllowedWindow(t *testing.T) {
 	assert.Equal(t, map[string]any{"window": "seven_day"}, limits[0].Data)
 }
 
-func TestMapperUsageLimitResultTakesRejectedWindow(t *testing.T) {
-	resetsAt := time.Unix(1794510000, 0).UTC()
+func TestMapperRejectedOverageEventStopsRun(t *testing.T) {
+	rejected := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1794510000,"rateLimitType":"five_hour","isUsingOverage":true,"overageStatus":"allowed"}}` + "\n"
+	// The rest of a real run follows the event; none of it may be processed.
+	data := []byte(rejected + string(readFixture(t, "real/t1.jsonl")))
 
-	var transcript bytes.Buffer
+	stopped, evs, res, err := feedUntilStop(t, data, mapperOpts{}, nil, nil)
 
-	m := newMapper(mapperOpts{Emitter: events.NewEmitter(nil, &transcript)})
-	m.lastRL = RateLimit{Status: "rejected", Window: "seven_day_opus", ResetsAt: resetsAt}
-
-	m.feed([]byte(limitResult("You've hit your weekly limit")))
-
-	_, err := m.finish(nil)
+	assert.True(t, stopped)
 
 	var ule *UsageLimitError
 
 	require.ErrorAs(t, err, &ule)
-	assert.Equal(t, "seven_day_opus", ule.Window)
-	assert.True(t, resetsAt.Equal(ule.ResetsAt))
+	assert.Equal(t, "five_hour", ule.Window)
+	assert.Equal(t, "error", res.Reason)
+
+	require.Len(t, ofKind(evs, events.Kind("usage_limit")), 1)
+	assert.Empty(t, ofKind(evs, events.ModelRequest))
+	assert.Empty(t, ofKind(evs, events.ModelResponse))
 }
 
 func TestMapperNotLoggedIn(t *testing.T) {

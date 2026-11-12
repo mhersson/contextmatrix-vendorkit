@@ -176,7 +176,6 @@ type mapper struct {
 	limit        *UsageLimitError
 	authFailed   bool
 	serverErr    error
-	lastRL       RateLimit
 
 	sid     string
 	version string // claude_code_version from init
@@ -609,8 +608,6 @@ func (m *mapper) noteTerminal(id string) {
 
 func (m *mapper) onRateLimit(info *rateLimitInfo) {
 	rl := parseRateLimit(info)
-	m.lastRL = rl
-
 	// Keep the last known windows: an event without any says nothing new.
 	if len(rl.Windows) > 0 {
 		m.subscription = slices.Clone(rl.Windows)
@@ -648,13 +645,9 @@ func isUsageLimitText(text string) bool {
 	return strings.HasPrefix(text, limitPrefix) || strings.Contains(strings.ToLower(text), "usage limit")
 }
 
-// resultLimit reports a usage limit a 429 result carried. Only a rejected
-// rate_limit_event names the binding window; an allowed one may be another's.
+// resultLimit reports a usage limit a 429 result carried, named by its text.
+// A rejected rate_limit_event halts the mapper, so its result is never fed.
 func (m *mapper) resultLimit(text string) *UsageLimitError {
-	if m.lastRL.Status == "rejected" {
-		return m.usageLimit(m.lastRL)
-	}
-
 	if rest, ok := strings.CutPrefix(text, limitPrefix); ok {
 		for _, w := range limitWindows {
 			if strings.HasPrefix(rest, w.name) {

@@ -48,7 +48,9 @@ mid-turn and deadlock.
 Errors to branch on:
 
 - `*UsageLimitError` (`errors.As`): a subscription usage limit stopped the run
-  or ended the session. Park or show the state; never retry.
+  or ended the session. A rejected window stops the run even when Claude Code
+  would serve the call on extra usage (`isUsingOverage`). Park or show the
+  state; never retry.
 - `ErrNotLoggedIn` (`errors.Is`): Claude Code did not accept the token.
 - A bridge or `Spec.MCPServers` server that Claude Code reports `failed` or
   `needs-auth` at init stops the run, or ends the session, with an error naming

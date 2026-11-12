@@ -33,7 +33,6 @@ type Session struct {
 
 	// The last rate-limit windows, carried into the next turn; guarded by sem.
 	subscription []protocol.SubscriptionUsage
-	lastRL       RateLimit
 
 	ready chan struct{} // closed at the initialize answer
 	ended chan struct{} // closed once the end path has run
@@ -188,7 +187,7 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 		OnDelta: s.spec.OnDelta, OnRateLimit: s.spec.OnRateLimit,
 		Prefix: bridgePrefix, Servers: serverNames(s.spec.MCPServers), Session: true, Task: text, TaskImages: images,
 	})
-	m.subscription, m.lastRL = s.subscription, s.lastRL
+	m.subscription = s.subscription
 
 	t := &turn{m: m, done: make(chan struct{})}
 
@@ -230,7 +229,7 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 	// The end path closes stdin before it closes done, so this cannot block.
 	<-wrote
 
-	s.subscription, s.lastRL = m.subscription, m.lastRL
+	s.subscription = m.subscription
 
 	return t.res, t.err
 }
