@@ -160,7 +160,8 @@ func startSession(ctx context.Context, spec Spec, o runOpts) (*Session, error) {
 // waiting for its turn, ends the session (as Close) and returns Reason
 // "canceled" with an error wrapping context.Cause(ctx); a result that came
 // first keeps its outcome. Send emits user_input first and state_change
-// awaiting_human after the turn, and stores the transcript before it returns.
+// awaiting_human after the turn, and stores the transcript before it returns,
+// except for a turn halted by a configured MCP server (*MCPServerError).
 // Result.Messages holds this turn only. A usage limit ends the session. Send on
 // a session whose process has exited returns an error at once. Never call it
 // from Spec.OnDelta, Spec.OnRateLimit or the Emitter's writers: the session
@@ -360,7 +361,8 @@ func (s *Session) completeTurn(t *turn) {
 }
 
 // end runs once, on the reader goroutine, after the process is reaped: it
-// finishes an in-flight turn, stores the transcript, emits the session's one
+// finishes an in-flight turn, stores the transcript (unless a configured MCP
+// server halted the turn), emits the session's one
 // stop, closes the bridge and removes the run dir.
 func (s *Session) end(ready bool, procErr error) {
 	s.mu.Lock()

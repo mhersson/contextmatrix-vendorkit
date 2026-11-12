@@ -30,7 +30,8 @@ func (e *UsageLimitError) Error() string {
 // (a Spec.MCPServers entry) failed or needs-auth at init. The halted turn's
 // request may already be out; a Session discards that turn and keeps the stored
 // transcript from the last completed turn, so a caller may resume and resend it
-// once. After a first-turn halt nothing is stored: start a fresh session.
+// once. A halt on a fresh session's first turn leaves nothing stored, so start a
+// fresh session.
 type MCPServerError struct {
 	Server string // the Spec.MCPServers name
 	Status string // "failed" or "needs-auth", as init reported it

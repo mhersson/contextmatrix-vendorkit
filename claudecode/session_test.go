@@ -843,13 +843,16 @@ func TestSessionServerHaltKeepsLastGoodTranscript(t *testing.T) {
 
 	for _, tc := range []struct {
 		name      string
+		server    string // the server init reports failed
 		completed bool
+		typed     bool // the halt is a *MCPServerError, so the turn is discarded
 	}{
-		{"after a completed turn", true},
-		{"first turn", false},
+		{"configured server after a completed turn", "extra", true, true},
+		{"configured server on the first turn", "extra", false, true},
+		{"bridge after a completed turn", serverName, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			halt := serverStatusFixture(t, "extra", "failed")
+			halt := serverStatusFixture(t, tc.server, "failed")
 			turns := []string{halt}
 
 			if tc.completed {
@@ -857,7 +860,6 @@ func TestSessionServerHaltKeepsLastGoodTranscript(t *testing.T) {
 			}
 
 			f := newFakeSession(t, fakeclaude.Scenario{Turns: turns})
-			f.spec.Home, f.spec.Dir = t.TempDir(), t.TempDir()
 			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
 			s := startFake(t, f, sessionOpts())
 
@@ -874,13 +876,18 @@ func TestSessionServerHaltKeepsLastGoodTranscript(t *testing.T) {
 			_, err := s.Send(boundCtx(t), "work", nil)
 
 			var se *MCPServerError
-			require.ErrorAs(t, err, &se)
+			require.Equal(t, tc.typed, errors.As(err, &se))
+			require.Error(t, err)
 			require.NoError(t, s.Close())
 
 			after := storedFiles(f.spec.Home)
-			if tc.completed {
+
+			switch {
+			case !tc.typed:
+				assert.NotEqual(t, before, after)
+			case tc.completed:
 				assert.Equal(t, before, after)
-			} else {
+			default:
 				assert.Empty(t, after)
 			}
 		})
