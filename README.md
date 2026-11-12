@@ -70,6 +70,9 @@ Events are the harness kinds, in harness order. The ones that differ:
   own process.
 - `usage_limit` (`window`, `resets_at` when known): emitted before the final
   `state_change` when a usage limit stops the run or session.
+- `tool_result`: Claude Code runs a message's tool calls while its later
+  `tool_use` blocks still stream; a call's `tool_result` events still follow
+  all of its `tool_call` events.
 
 ## Claude Code invariants
 

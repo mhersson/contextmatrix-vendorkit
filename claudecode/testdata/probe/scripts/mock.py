@@ -8,6 +8,10 @@ Usage: mock.py PORT LOG SCENARIO [TOOL_INPUT_JSON [HOLD_FILE]]
                  TOOL_INPUT_JSON; after a tool_result, answer "done" and end the turn.
   SCENARIO idle: with mcp__cm__sleep in the request's tools, one sleep call; after its
                  tool_result, answer "done" and end the turn.
+  SCENARIO parallel: when the last user turn is not a tool_result, answer one message with five
+                 Bash tool_use blocks (echo one..five), each streamed in three input_json_delta
+                 fragments with PAUSE seconds between fragments and blocks, so Claude Code runs the
+                 early calls while the later blocks still stream; after the results, "done".
   SCENARIO smoke: for claudecode's smoke tests, by the request's tools. With mcp__cm__finish:
                  finish {} (refused), then finish with commit_message and summary, then "all done"
                  (the stop hook should end the run before it). With Bash: one Bash tool_use whose
@@ -31,6 +35,8 @@ SCENARIO = sys.argv[3]
 TOOL_INPUT = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 HOLD = sys.argv[5] if len(sys.argv) > 5 else ""
 MAX_TOOL_ANSWERS = 6  # guard against a tool loop when a probe goes wrong
+PARALLEL = ["one", "two", "three", "four", "five"]
+PAUSE = 0.4
 FINISH = "mcp__cm__finish"
 SLEEP = "mcp__cm__sleep"
 FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
@@ -163,6 +169,23 @@ class H(BaseHTTPRequestHandler):
             "id": f"msg_mock{RUN}_{n}", "type": "message", "role": "assistant", "model": model, "content": [],
             "stop_reason": None, "stop_sequence": None, "usage": usage0}}))
         answer = tool_answer(body, n)
+        if SCENARIO == "parallel" and not last_is_tool_result(body.get("messages", [])):
+            for i, word in enumerate(PARALLEL):
+                args = json.dumps({"command": f"echo {word}", "description": f"Print {word}"})
+                w(sse("content_block_start", {"type": "content_block_start", "index": i, "content_block": {
+                    "type": "tool_use", "id": f"toolu_mock{RUN}_{n}_{i}", "name": "Bash", "input": {}}}))
+                for a, b in [(0, 5), (5, len(args) // 2), (len(args) // 2, len(args))]:
+                    self.wfile.flush()
+                    time.sleep(PAUSE)
+                    w(sse("content_block_delta", {"type": "content_block_delta", "index": i, "delta": {
+                        "type": "input_json_delta", "partial_json": args[a:b]}}))
+                w(sse("content_block_stop", {"type": "content_block_stop", "index": i}))
+            w(sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                                    "usage": dict(usage0, output_tokens=5)}))
+            w(sse("message_stop", {"type": "message_stop"}))
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if answer:
             w(sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {
                 "type": "tool_use", "id": f"toolu_mock{RUN}_{n}", "name": answer[0], "input": {}}}))
@@ -170,7 +193,7 @@ class H(BaseHTTPRequestHandler):
                 "type": "input_json_delta", "partial_json": json.dumps(answer[1])}}))
             stop = "tool_use"
         else:
-            text = {"bash": "done", "idle": "done", "smoke": "all done"}.get(SCENARIO, "ok")
+            text = {"bash": "done", "idle": "done", "parallel": "done", "smoke": "all done"}.get(SCENARIO, "ok")
             w(sse("content_block_start", {"type": "content_block_start", "index": 0,
                                           "content_block": {"type": "text", "text": ""}}))
             w(sse("content_block_delta", {"type": "content_block_delta", "index": 0,

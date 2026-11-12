@@ -446,7 +446,7 @@ func TestMapperToolEvents(t *testing.T) {
 	evs, res, err := replay(t, "real/t5.jsonl", mapperOpts{Prefix: cmlocal})
 	require.NoError(t, err)
 
-	// Without stream events the tool_result line closes the call; the result
+	// Without stream events the next call's line closes the call; the result
 	// adds the remainder of the early output_tokens snapshots.
 	require.Equal(t, []events.Kind{
 		events.ModelRequest, events.ModelResponse, events.UsageKind, events.ToolCallKind,
@@ -1326,6 +1326,157 @@ func TestMapperBackstopOrdersByStream(t *testing.T) {
 			assert.Equal(t, []string{"user", "assistant", "tool"}, roles(res.Messages))
 			assert.Len(t, ofKind(evs, events.ToolCallKind), 1)
 			assert.Len(t, ofKind(evs, events.ToolResult), 1)
+		})
+	}
+}
+
+// moveLineAfter moves the line containing marker to just after the line
+// containing after.
+func moveLineAfter(t *testing.T, data []byte, marker, after string) []byte {
+	t.Helper()
+
+	var moved []byte
+
+	var rest [][]byte
+
+	for line := range bytes.Lines(data) {
+		if bytes.Contains(line, []byte(marker)) {
+			require.Nil(t, moved, "marker %q matches more than one line", marker)
+
+			moved = line
+
+			continue
+		}
+
+		rest = append(rest, line)
+	}
+
+	require.NotNil(t, moved, "no line contains %q", marker)
+
+	var out []byte
+
+	placed := false
+
+	for _, line := range rest {
+		out = append(out, line...)
+
+		if !placed && bytes.Contains(line, []byte(after)) {
+			out = append(out, moved...)
+			placed = true
+		}
+	}
+
+	require.True(t, placed, "no line contains %q", after)
+
+	return out
+}
+
+// TestMapperParallelToolCalls: Claude Code runs a message's early tool calls
+// while its later tool_use blocks still stream, so tool_result lines land
+// inside the message (synthetic/parallel.jsonl).
+func TestMapperParallelToolCalls(t *testing.T) {
+	const call = "toolu_mock73c9e4_1_"
+
+	words := []string{"one", "two", "three", "four", "five"}
+	data := readFixture(t, "synthetic/parallel.jsonl")
+	resultOf := func(i int) string { return fmt.Sprintf(`"tool_use_id":"%s%d"`, call, i) }
+
+	for _, tc := range []struct {
+		name   string
+		data   []byte
+		stream bool
+	}{
+		{"as recorded", data, true},
+		{"first result last", moveLineAfter(t, data, resultOf(0), resultOf(4)), true},
+		{"assistant lines only", dropLines(data, `"type":"stream_event"`), false},
+		{"assistant lines, first result last", dropLines(moveLineAfter(t, data, resultOf(0), resultOf(4)), `"type":"stream_event"`), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[int]*strings.Builder{}
+
+			evs, res, err := replayData(t, tc.data, mapperOpts{
+				Prefix: "mcp__cm__",
+				Task:   "run the commands",
+				OnDelta: func(d llm.Delta) {
+					if d.ToolCall == nil {
+						return
+					}
+
+					if args[d.ToolCall.Index] == nil {
+						args[d.ToolCall.Index] = &strings.Builder{}
+					}
+
+					args[d.ToolCall.Index].WriteString(d.ToolCall.ArgsFragment)
+				},
+			}, nil)
+			require.NoError(t, err)
+
+			wantArgs := func(i int) string {
+				return fmt.Sprintf(`{"command":"echo %s","description":"Print %s"}`, words[i], words[i])
+			}
+
+			calls := ofKind(evs, events.ToolCallKind)
+			require.Len(t, calls, len(words))
+
+			for i, ev := range calls {
+				assert.Equal(t, fmt.Sprintf("%s%d", call, i), ev.Data["id"])
+				assert.Equal(t, "Bash", ev.Data["name"])
+
+				raw, ok := ev.Data["raw_args"].(string)
+				require.True(t, ok)
+				assert.JSONEq(t, wantArgs(i), raw)
+			}
+
+			assert.Equal(t, len(words), res.ToolCallCount)
+			assert.Len(t, ofKind(evs, events.ToolResult), len(words))
+
+			pos := map[string]int{}
+
+			for i, ev := range evs {
+				id, _ := ev.Data["id"].(string)
+
+				switch ev.Kind {
+				case events.ToolCallKind:
+					pos[id] = i
+				case events.ToolResult:
+					called, ok := pos[id]
+					require.Truef(t, ok, "result %s before its tool_call event", id)
+					assert.Less(t, called, i)
+				}
+			}
+
+			responses := ofKind(evs, events.ModelResponse)
+			require.Len(t, responses, 2)
+			assert.InDelta(t, len(words), responses[0].Data["tool_calls"], 0)
+			// Assistant lines carry only early output_tokens; the result adds one
+			// remainder event for the rest.
+			usages := len(responses)
+			if !tc.stream {
+				usages++
+			}
+
+			assert.Len(t, ofKind(evs, events.UsageKind), usages, "one usage event per API call")
+			assert.Equal(t, resultBuckets(res), sumUsage(t, evs))
+
+			requireValidTranscript(t, res.Messages)
+			require.Equal(t, []string{"user", "assistant", "tool", "tool", "tool", "tool", "tool", "assistant"}, roles(res.Messages))
+
+			tcs := res.Messages[1].ToolCalls
+			require.Len(t, tcs, len(words))
+
+			for i, c := range tcs {
+				assert.JSONEq(t, wantArgs(i), c.Function.Arguments)
+			}
+
+			if !tc.stream {
+				return
+			}
+
+			require.Len(t, args, len(words))
+
+			for i := range words {
+				assert.JSONEq(t, wantArgs(i), args[i].String(), "streamed fragments of call %d", i)
+			}
 		})
 	}
 }

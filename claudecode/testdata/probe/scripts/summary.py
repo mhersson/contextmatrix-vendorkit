@@ -119,6 +119,16 @@ for row in open(f"{S}/mock/maxturns/run/timing.txt", encoding="utf-8") if lines 
     if "exit rc=" in row:
         print("exit:", row.strip())
 
+section("parallel tool calls")
+order = []
+for d in jl(f"{S}/mock/parallel/run/stdout.jsonl"):
+    if d.get("type") == "stream_event" and d["event"].get("type") in ("content_block_start", "message_stop"):
+        order.append(d["event"]["type"].replace("content_block_start", "block") + str(d["event"].get("index", "")))
+    elif d.get("type") == "user" and isinstance(d["message"].get("content"), list):
+        order += ["result" + c["tool_use_id"].rsplit("_", 1)[-1] for c in d["message"]["content"]
+                  if c.get("type") == "tool_result"]
+print("blocks, results and message ends, in stream order:", order)
+
 section("P6 config-dir isolation and resume")
 P = f"{S}/p6"
 auth = {q.get("authorization") for r_ in "ABC" for q in jl(f"{P}/mock{r_}/requests.jsonl")}
