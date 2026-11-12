@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The smoke tests run the real claude binary through Run against the mock
+// The smoke tests run the real claude binary through Run and Session against the mock
 // Messages API in testdata/probe/scripts/mock.py (scenario smoke), with dummy
 // credentials only; testdata/probe/scripts/smoke.sh runs them in the jail.
 
@@ -165,22 +165,30 @@ func TestSmokeBridgedResultWhole(t *testing.T) {
 }
 
 // TestSmokeNoAttribution proves Run and Session start claude with its commit
-// and PR attribution off: the mock answers with the attribution texts it found
+// and PR attribution off, also when Spec.Env names a remote session (which adds
+// a Claude-Session line): the mock answers with the attribution texts it found
 // in the request that carried the task.
 func TestSmokeNoAttribution(t *testing.T) {
 	binary, mockURL := smokeTarget(t)
 
 	const task = "Commit the change. REPORT-TASK-7f3a"
 
+	remote := []string{"CLAUDE_CODE_ENTRYPOINT=remote", "CLAUDE_CODE_REMOTE_SESSION_ID=session_01SmokeProbe"}
+
 	for _, tc := range []struct {
 		name    string
 		session bool
+		env     []string
 	}{
-		{"run", false},
-		{"session", true},
+		{"run", false, nil},
+		{"session", true, nil},
+		{"run remote session env", false, remote},
+		{"session remote session env", true, remote},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, opts, _ := smokeRun(t, binary, mockURL)
+			spec.Env = append(spec.Env, tc.env...)
+			// 2.1.322 sends its attribution guidance only when Bash is available.
 			spec.BuiltinTools = []string{"Bash"}
 			spec.Tools = tools.NewRegistry(stubTool{name: "report", exec: func(map[string]any) (tools.Result, error) {
 				return tools.Result{}, errors.New("the mock answers report requests without calling it")

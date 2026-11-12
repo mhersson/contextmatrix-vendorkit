@@ -66,12 +66,13 @@ type settingsFile struct {
 	Attribution attribution              `json:"attribution"`
 }
 
-// attribution is Claude Code's commit and PR attribution text. Empty texts stop
-// 2.1.322 from telling the model to add its Co-Authored-By trailer and PR footer;
-// a resumed session gets a reminder that overrides any earlier attribution guidance.
+// attribution turns off Claude Code's commit and PR attribution: empty texts drop
+// 2.1.322's Co-Authored-By trailer and PR footer, and SessionURL false drops the
+// Claude-Session line a remote-session env (reachable through Spec.Env) adds.
 type attribution struct {
-	Commit string `json:"commit"`
-	PR     string `json:"pr"`
+	Commit     string `json:"commit"`
+	PR         string `json:"pr"`
+	SessionURL bool   `json:"sessionUrl"`
 }
 
 // buildInvocation returns the claude argv and the per-run file contents keyed

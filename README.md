@@ -120,11 +120,12 @@ Events are the harness kinds, in harness order. The ones that differ:
   outlives its `timeout` is then ended (exit 143, "Command timed out"), not
   moved to the background.
 - Claude Code's commit and PR attribution is off in every child: the
-  generated `--settings` file sets `attribution` to an empty `commit` and `pr`,
-  so 2.1.322 sends no reminder telling the model to end commit messages with a
-  `Co-Authored-By` trailer or PR descriptions with its footer. A resumed
-  session instead gets a reminder that overrides the attribution guidance its
-  transcript carries. No `Spec` field reaches the settings file.
+  generated `--settings` file sets `attribution` to an empty `commit` and `pr`
+  and `sessionUrl: false`, so 2.1.322 tells the model to add no
+  `Co-Authored-By` trailer, PR footer or `Claude-Session` line (the last comes
+  from a remote-session env, which `Spec.Env` could carry). A resumed session
+  whose transcript holds the old guidance gets a reminder overriding it. No
+  `Spec` field reaches the settings file.
 - The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
   tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
   with a 2 KB `<persisted-output>` preview and a file path

@@ -51,7 +51,7 @@ FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
 SLEEPER = {"command": "sh -c 'echo $$ > bash.pid; exec sleep 300'", "description": "Sleep"}
 MARKERS = ["MARKER-REPLACE-7f3a", "MARKER-APPEND-7f3a"]
 # Claude Code's commit and PR attribution texts, searched in each request part.
-ATTRIBUTION = ["Co-Authored-By", "Generated with [Claude Code]"]
+ATTRIBUTION = ["Co-Authored-By", "Generated with [Claude Code]", "Claude-Session"]
 # Unique per mock start: a resumed transcript must not meet message or tool IDs it already holds.
 RUN = format(int(time.time() * 1000) % 0xFFFFFF, "06x")
 lock = threading.Lock()

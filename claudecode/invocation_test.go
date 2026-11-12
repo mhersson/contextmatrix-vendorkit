@@ -222,7 +222,7 @@ func TestInvocationFiles(t *testing.T) {
 
 				require.NoError(t, json.Unmarshal(files[filepath.Join(testRun, "settings.json")], &settings))
 				require.Contains(t, settings, "attribution")
-				assert.JSONEq(t, `{"commit":"","pr":""}`, string(settings["attribution"]))
+				assert.JSONEq(t, `{"commit":"","pr":"","sessionUrl":false}`, string(settings["attribution"]))
 			})
 		}
 	})
