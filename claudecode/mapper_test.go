@@ -632,6 +632,28 @@ func TestMapperMasksSecret(t *testing.T) {
 		assert.NotContains(t, string(transcript), secret)
 	})
 
+	t.Run("budget done output", func(t *testing.T) {
+		data := rewrite(readFixture(t, "synthetic/max_budget_end_turn.jsonl"), `"text":"ok"`, `"text":"`+secret+`"`, `"text_delta","text":"ok"`, `"text_delta","text":"`+secret+`"`)
+		require.Contains(t, string(data), secret)
+
+		_, res, err := replayData(t, data, mapperOpts{Secret: secret}, nil)
+		require.NoError(t, err)
+		require.Equal(t, "done", res.Reason)
+		assert.NotContains(t, res.Output, secret)
+	})
+
+	t.Run("failed server name", func(t *testing.T) {
+		data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"`+secret+`","status":"failed"}]`)
+
+		_, _, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__", Servers: []string{secret}, Secret: secret}, errors.New("signal: killed"))
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), secret)
+
+		var se *MCPServerError
+		require.ErrorAs(t, err, &se, "masking keeps the typed error reachable")
+		assert.Equal(t, "failed", se.Status)
+	})
+
 	t.Run("process error", func(t *testing.T) {
 		procErr := errors.New("exit status 1: " + secret)
 
@@ -665,6 +687,36 @@ func TestMapperCapsReasons(t *testing.T) {
 			st := stops(evs)
 			require.Len(t, st, 1)
 			assert.Equal(t, tc.want, st[0].Data["stop"])
+		})
+	}
+}
+
+func TestMapperBudgetStop(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		opts       mapperOpts
+		wantReason string
+		wantOutput string
+	}{
+		{"final answer crosses the budget", "synthetic/max_budget_end_turn.jsonl", mapperOpts{}, "done", "ok"},
+		{"final answer crosses the budget in a session", "synthetic/max_budget_end_turn.jsonl", mapperOpts{Session: true}, "done", "ok"},
+		{"requested tool never runs", "synthetic/max_budget_tool_use.jsonl", mapperOpts{}, "max_cost", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evs, res, err := replay(t, tc.path, tc.opts)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantReason, res.Reason)
+			assert.Equal(t, tc.wantReason == "done", res.Completed)
+			assert.Equal(t, tc.wantOutput, res.Output)
+			assert.Empty(t, ofKind(evs, events.ErrorKind))
+
+			if !tc.opts.Session {
+				st := stops(evs)
+				require.Len(t, st, 1)
+				assert.Equal(t, tc.wantReason, st[0].Data["stop"])
+			}
 		})
 	}
 }
@@ -1153,23 +1205,24 @@ func TestMapperUsageLimitResultIgnoresAllowedWindow(t *testing.T) {
 	assert.Equal(t, map[string]any{"window": "seven_day"}, limits[0].Data)
 }
 
-func TestMapperUsageLimitResultTakesRejectedWindow(t *testing.T) {
-	resetsAt := time.Unix(1794510000, 0).UTC()
+func TestMapperRejectedOverageEventStopsRun(t *testing.T) {
+	rejected := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1794510000,"rateLimitType":"five_hour","isUsingOverage":true,"overageStatus":"allowed"}}` + "\n"
+	// The rest of a real run follows the event; none of it may be processed.
+	data := []byte(rejected + string(readFixture(t, "real/t1.jsonl")))
 
-	var transcript bytes.Buffer
+	stopped, evs, res, err := feedUntilStop(t, data, mapperOpts{}, nil, nil)
 
-	m := newMapper(mapperOpts{Emitter: events.NewEmitter(nil, &transcript)})
-	m.lastRL = RateLimit{Status: "rejected", Window: "seven_day_opus", ResetsAt: resetsAt}
-
-	m.feed([]byte(limitResult("You've hit your weekly limit")))
-
-	_, err := m.finish(nil)
+	assert.True(t, stopped)
 
 	var ule *UsageLimitError
 
 	require.ErrorAs(t, err, &ule)
-	assert.Equal(t, "seven_day_opus", ule.Window)
-	assert.True(t, resetsAt.Equal(ule.ResetsAt))
+	assert.Equal(t, "five_hour", ule.Window)
+	assert.Equal(t, "error", res.Reason)
+
+	require.Len(t, ofKind(evs, events.Kind("usage_limit")), 1)
+	assert.Empty(t, ofKind(evs, events.ModelRequest))
+	assert.Empty(t, ofKind(evs, events.ModelResponse))
 }
 
 func TestMapperNotLoggedIn(t *testing.T) {
@@ -1221,9 +1274,16 @@ func TestMapperUntestedVersionProceeds(t *testing.T) {
 	assert.Contains(t, err.Error(), "2.1.400")
 	assert.Contains(t, err.Error(), Version)
 
+	crash := readFixture(t, "synthetic/crash.jsonl")
+	stripped := rewrite(crash, `"claude_code_version":"`+Version+`",`, "")
+	require.NotEqual(t, crash, stripped, "the fixture carries no version to strip")
+
+	_, _, want := replayData(t, stripped, mapperOpts{Prefix: cmlocal}, nil)
+	require.Error(t, want)
+
 	_, _, err = replay(t, "synthetic/crash.jsonl", mapperOpts{Prefix: cmlocal})
 	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "tested", "a matching version adds nothing")
+	assert.Equal(t, want.Error(), err.Error(), "a matching version adds nothing")
 
 	t.Run("not on cancellation", func(t *testing.T) {
 		procErr := fmt.Errorf("%w: stop", context.Canceled)
@@ -1246,27 +1306,58 @@ func TestMapperBridgeFailed(t *testing.T) {
 	assert.Empty(t, ofKind(evs, events.ModelRequest), "nothing after init is processed")
 	require.Len(t, ofKind(evs, events.ErrorKind), 1)
 
-	t.Run("other servers do not stop the run", func(t *testing.T) {
-		data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"other","status":"failed"}]`)
-
-		stopped, _, _, err := feedUntilStop(t, data, mapperOpts{Prefix: "mcp__cm__"}, nil, nil)
-		require.NoError(t, err)
-		assert.True(t, stopped, "only the result stops a Run")
-	})
-}
-
-func TestMapperInitCaptures(t *testing.T) {
-	m := newMapper(mapperOpts{})
-	assert.Empty(t, m.sessionID())
-
-	line := bytes.Lines(readFixture(t, "real/t1.jsonl"))
-	for l := range line {
-		m.feed(bytes.TrimSpace(l))
-
-		break
+	initWith := func(servers string) []byte {
+		return rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":`+servers)
 	}
 
-	assert.Equal(t, "e7d93133-865e-4f91-b7e2-348d66e79b59", m.sessionID())
+	for _, tc := range []struct{ name, server, servers string }{
+		{"configured server failed", "extra", `[{"name":"extra","status":"failed"}]`},
+		{"configured server needs auth", "extra", `[{"name":"extra","status":"needs-auth"}]`},
+		{"bridge needs auth", "cm", `[{"name":"cm","status":"needs-auth"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}}
+
+			stopped, evs, res, err := feedUntilStop(t, initWith(tc.servers), opts, errors.New("signal: killed"), nil)
+			require.True(t, stopped)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `"`+tc.server+`"`)
+			assert.Equal(t, "error", res.Reason)
+			assert.Empty(t, ofKind(evs, events.ModelRequest))
+
+			var se *MCPServerError
+			if tc.server == "extra" {
+				require.ErrorAs(t, err, &se)
+				assert.Equal(t, tc.server, se.Server)
+			} else {
+				assert.NotErrorAs(t, err, &se, "a bridge failure is not the typed error")
+			}
+		})
+	}
+
+	t.Run("session turn halts with the error", func(t *testing.T) {
+		opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}, Session: true}
+
+		stopped, _, res, err := feedUntilStop(t, initWith(`[{"name":"extra","status":"failed"}]`), opts, errors.New("signal: killed"), nil)
+		require.True(t, stopped)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"extra"`)
+		assert.Equal(t, "error", res.Reason)
+	})
+
+	t.Run("healthy and unconfigured servers do not stop the run", func(t *testing.T) {
+		for _, servers := range []string{
+			`[{"name":"extra","status":"connected"}]`,
+			`[{"name":"extra","status":"pending"}]`,
+			`[{"name":"other","status":"failed"},{"name":"other2","status":"needs-auth"}]`,
+		} {
+			opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}}
+
+			stopped, _, _, err := feedUntilStop(t, initWith(servers), opts, nil, nil)
+			require.NoError(t, err)
+			assert.True(t, stopped, "only the result stops a Run")
+		}
+	})
 }
 
 func TestMapperBackstopAfterTerminal(t *testing.T) {

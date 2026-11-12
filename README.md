@@ -23,7 +23,9 @@ if found, tested, err := claudecode.CheckVersion(ctx, binary); err == nil && !te
 ```
 
 Check the version once at start. A mismatch is never an error and a run on an
-untested release proceeds; if it fails, the error names the version that ran.
+untested release proceeds; if it fails after init reported a version other than
+`Version`, the error names both (login and usage-limit errors aside). A failure
+before init, such as a flag the CLI rejects, carries no version.
 
 **Run** (agent phases, architect stages): split the harness registry, set the
 `Spec` and call `Run`.
@@ -48,14 +50,32 @@ mid-turn and deadlock.
 Errors to branch on:
 
 - `*UsageLimitError` (`errors.As`): a subscription usage limit stopped the run
-  or ended the session. Park or show the state; never retry.
+  or ended the session. A rejected window stops the run even when Claude Code
+  would serve the call on extra usage (`isUsingOverage`). Park or show the
+  state; never retry.
 - `ErrNotLoggedIn` (`errors.Is`): Claude Code did not accept the token.
+- `*MCPServerError` (`errors.As`): Claude Code reported a `Spec.MCPServers`
+  server `failed` or `needs-auth` at init; it carries `Server` and `Status`. The
+  run stops, or the session ends (`Result.Reason` `"error"`). A bridge server
+  reported the same way ends the run or session with an error naming the
+  bridge, not this type.
+  2.1.322 re-reports each server's status at every `Session` turn's init, and
+  after about 16 s of downtime a server stays failed for the rest of that
+  process, even once it is back. The halted turn's request may already be out;
+  a `Session` discards that turn and keeps the stored transcript from the last
+  completed turn, so a caller may resume and resend it once. A halt on a fresh
+  session's first turn leaves nothing stored, so start a fresh session. A `Session`
+  turn halted this way emits no `error` event (the returned error and the
+  session's stop remain); a `Run` still does.
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.
 
-Success is judged by `is_error`, never `subtype`. An unknown or absent
-terminal reason with `is_error: false` is `done`.
+Success is judged by `is_error`, never `subtype`, with one exception: an
+`error_max_budget_usd` result whose last call ended its turn with no tool use
+ends `done` with that answer as Output. Any other budget stop is `max_cost`
+with no Output. An unknown or absent terminal reason with `is_error: false` is
+`done`.
 
 ### Event contract
 
@@ -92,6 +112,19 @@ Events are the harness kinds, in harness order. The ones that differ:
 - The bridge's `--mcp-config` entry carries a per-server `timeout` of 1e8 ms.
   Without it 2.1.322 cuts a bridged call at 60 s, since the bridge answers only
   when the tool returns.
+- Background Bash tasks are disabled in every child
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, not overridable through
+  `Spec.Env`). A task finishing between `Session` turns makes 2.1.322 run an
+  unsolicited turn that `Session` would drop or hand to an overlapping `Send`;
+  with it set, the CLI refuses `run_in_background`. A foreground Bash call that
+  outlives its `timeout` is then ended (exit 143, "Command timed out"), not
+  moved to the background.
+- The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
+  tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
+  with a 2 KB `<persisted-output>` preview and a file path
+  instead of the result. The bridge caps nothing itself, so each caller caps
+  its own bridged results (the architect wraps its tools at 128 KiB); a result
+  over 400,000 chars still arrives as a preview.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
   tool starts children with `setsid`, which leaves that group; on Linux
   `subproc` kills such escaped descendants before the SIGKILL escalation. On
@@ -142,6 +175,10 @@ Moving `Version`:
    ```
 
 3. The operator does a live auth check.
+4. Each backend pins the release in its image and tests the pin; each test
+   fails until that backend's image pin equals `Version`: agent
+   `internal/modelexec/pin_test.go`, chat `internal/chatwork/claudecode_test.go`,
+   architect `internal/cli/claudepin_test.go`.
 
 ## Development
 

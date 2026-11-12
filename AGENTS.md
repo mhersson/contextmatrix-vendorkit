@@ -30,8 +30,11 @@ allowlist, so the vendor executor lives here.
 
 - Go 1.27+; format with `make fmt` (gofumpt); imports via goimports.
 - Wrap errors with `fmt.Errorf("operation: %w", err)`. Never swallow an error.
-- `context.Context` is the first parameter of every function that does I/O
-  (process, network, files).
+- Exported entry points that block on I/O (process, network, files) take
+  `context.Context` first: `Run`, `StartSession`, `Session.Send`,
+  `CheckVersion`, `mcpbridge.Start`. The exceptions are `subproc` `Start`,
+  `Stop` and `Wait`, `Bridge.Close`, `Session.Close` and the unexported
+  transcript helpers.
 - No global state, no `init()`. Dependencies are struct or `Spec` fields wired
   by the caller.
 - Interfaces live in the package that uses them; constructors and entry points
@@ -50,7 +53,9 @@ allowlist, so the vendor executor lives here.
   ContextMatrix builds install it. A host install is the user's: no
   ContextMatrix tool installs, upgrades or changes it. `CheckVersion` reports a
   mismatch for the caller to log as a warning, and a run on an untested release
-  proceeds (if it fails, the error says which version ran).
+  proceeds (if it fails after init reported a version other than `Version`, the
+  error names both, login and usage-limit errors aside; a failure before init,
+  such as a rejected flag, carries no version).
 - Moving `Version` is a tested change: new fixtures, the CLI probes re-run, the
   opt-in smoke tests (`VENDORKIT_SMOKE_CLAUDE`, `VENDORKIT_SMOKE_MOCK`, run via
   `claudecode/testdata/probe/scripts/smoke.sh` inside `jail.sh`) and

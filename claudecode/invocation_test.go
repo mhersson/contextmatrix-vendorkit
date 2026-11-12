@@ -365,6 +365,12 @@ func TestChildEnv(t *testing.T) {
 	assert.Contains(t, env, "KEEP=1")
 	assert.NotContains(t, env, "HOME=/x")
 	assert.NotContains(t, env, "CLAUDE_CONFIG_DIR=/y")
+	assert.Contains(t, env, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+
+	s.Env = []string{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0"}
+	env = childEnv(s, "/run/config")
+	assert.Contains(t, env, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1")
+	assert.NotContains(t, env, "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=0")
 }
 
 // envValue returns the value of name in env, and whether env holds it.

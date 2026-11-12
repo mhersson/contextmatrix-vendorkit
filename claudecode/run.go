@@ -33,7 +33,6 @@ type runOpts struct {
 	grace       time.Duration
 	extraEnv    []string     // appended after the env scrub; the smoke tests point claude at a mock API
 	onLine      func([]byte) // every stdout line, unmasked; tests only
-	anyAccount  bool         // skip checkAccount; the smoke tests pay the mock with a dummy API key
 }
 
 // errNotSubscription marks a start whose initialize answer shows the run would
@@ -52,7 +51,7 @@ type initAccount struct {
 // apiKeySource beside tokenSource. No account (another release) passes; one
 // that cannot be read fails.
 func (o runOpts) checkAccount(raw json.RawMessage) error {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || o.anyAccount {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return nil
 	}
 
@@ -119,7 +118,7 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 	m := newMapper(mapperOpts{
 		Emitter: spec.Emitter, Redact: spec.Redact, Secret: spec.OAuthToken,
 		OnDelta: spec.OnDelta, OnRateLimit: spec.OnRateLimit,
-		Prefix: bridgePrefix, Terminal: l.terminal,
+		Prefix: bridgePrefix, Servers: serverNames(spec.MCPServers), Terminal: l.terminal,
 		SystemPrompt: spec.SystemPrompt, Task: spec.Task, TaskImages: spec.TaskImages,
 	})
 

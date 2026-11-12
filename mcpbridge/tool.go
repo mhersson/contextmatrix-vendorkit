@@ -17,6 +17,15 @@ const postTerminalResult = "unexecuted: an earlier call in this batch ended the 
 // closedResult answers a call that arrives while the bridge closes.
 const closedResult = "unexecuted: the run is ending"
 
+// maxResultSizeChars is the result size every tool declares: 2.1.322 replaces a bridged
+// result over about 50,000 chars with a 2 KB preview unless the tool declares a larger one.
+// The bridge caps nothing itself: callers cap their own results, and one over 400,000 chars
+// still becomes a preview.
+const maxResultSizeChars = 400_000
+
+// omittedImageNote replaces an image result whose URL is not a usable data URL.
+const omittedImageNote = "[image omitted: unsupported or malformed image URL]"
+
 var emptyObjectSchema = json.RawMessage(`{"type":"object"}`)
 
 func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.Tool, schema json.RawMessage) {
@@ -25,7 +34,9 @@ func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.To
 	term, isTerm := t.(tools.Terminal)
 	terminal := isTerm && term.Terminal()
 
-	server.AddTool(&mcp.Tool{Name: t.Name(), Description: fn.Description, InputSchema: schema},
+	meta := mcp.Meta{"anthropic/maxResultSizeChars": maxResultSizeChars}
+
+	server.AddTool(&mcp.Tool{Name: t.Name(), Description: fn.Description, InputSchema: schema, Meta: meta},
 		func(reqCtx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if !b.beginCall() {
 				return errorResult(closedResult), nil
@@ -111,7 +122,7 @@ func toResult(res tools.Result) *mcp.CallToolResult {
 	for _, img := range res.Images {
 		mime, data, ok := parseDataURL(img.URL)
 		if !ok {
-			out.Content = append(out.Content, &mcp.TextContent{Text: "[image omitted: unsupported or malformed image URL]"})
+			out.Content = append(out.Content, &mcp.TextContent{Text: omittedImageNote})
 
 			continue
 		}

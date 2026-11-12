@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mhersson/contextmatrix-vendorkit/internal/fakeclaude"
+	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 	"github.com/mhersson/contextmatrix-vendorkit/subproc"
 )
 
@@ -469,6 +470,26 @@ func TestRunUsageLimit(t *testing.T) {
 	assert.Equal(t, "seven_day", ule.Window)
 	assert.Equal(t, "error", res.Reason)
 	assert.True(t, processGone(f.recorded(t).PID))
+}
+
+func TestRunConfiguredServerFailed(t *testing.T) {
+	for _, status := range []string{"failed", "needs-auth"} {
+		t.Run(status, func(t *testing.T) {
+			f := newFakeRun(t, fakeclaude.Scenario{Replay: serverStatusFixture(t, "extra", status), Hang: true})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+
+			res, err := Run(boundCtx(t), f.spec)
+			require.Error(t, err)
+
+			var se *MCPServerError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, "extra", se.Server)
+			assert.Equal(t, status, se.Status)
+			assert.Equal(t, "error", res.Reason)
+			assert.Len(t, ofKind(f.log.events(t), events.ErrorKind), 1, "a Run keeps its error event")
+			assert.True(t, processGone(f.recorded(t).PID))
+		})
+	}
 }
 
 func TestRunWaitsForInitialize(t *testing.T) {

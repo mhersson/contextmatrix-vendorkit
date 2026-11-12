@@ -23,15 +23,14 @@ type Spec struct {
 	Dir        string   // working directory of the run
 	Home       string   // HOME for the commands the Bash built-in runs; required; may be long-lived and shared by concurrent runs; vendorkit keeps its own state under Home/.vendorkit and touches nothing else
 	OAuthToken string   // becomes CLAUDE_CODE_OAUTH_TOKEN in the child env only; required
-	Env        []string // base env (KEY=VALUE) for claude and the commands its Bash tool runs, minus the variables that move a run off the subscription; nil = only what vendorkit sets (HOME, CLAUDE_CONFIG_DIR, the token, DISABLE_AUTOUPDATER), so no PATH: pass at least PATH. A proxy variable here also adds the loopback hosts to NO_PROXY and no_proxy
+	Env        []string // base env (KEY=VALUE) for claude and the commands its Bash tool runs, minus the variables that move a run off the subscription; nil = only what vendorkit sets (HOME, CLAUDE_CONFIG_DIR, the token, DISABLE_AUTOUPDATER, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS), so no PATH: pass at least PATH. A proxy variable here also adds the loopback hosts to NO_PROXY and no_proxy
 
 	Model      string         // Claude Code model ID
 	Task       string         // first user message, written to stdin, never argv (Run only)
 	TaskImages []llm.ImageURL // data URLs, sent as image blocks with Task
 
 	// At most one of the two system-prompt fields is set. SystemPrompt
-	// replaces Claude Code's system prompt (architect); SystemPromptAppend
-	// appends to it (agent: phase prompt plus repo AGENTS.md / CLAUDE.md).
+	// replaces Claude Code's system prompt; SystemPromptAppend appends to it.
 	// Both go through a file, never argv.
 	SystemPrompt       string
 	SystemPromptAppend string
@@ -47,7 +46,7 @@ type Spec struct {
 	SessionID string // new persisted session with this UUID
 	Resume    string // continue this session ID (same Home and Dir); at most one of SessionID/Resume; neither = no persistence for Run, a persisted session with a fresh ID for Session
 
-	Emitter *events.Emitter     // required; events per section 2
+	Emitter *events.Emitter     // required; events follow the README "Event contract"
 	Redact  func(string) string // applied to content, args, thinking and errors before Emit; nil = identity
 	// OnDelta receives every streamed fragment synchronously, in order: text
 	// (Content), thinking (Reasoning) and tool input (ToolCall: Index, ID,

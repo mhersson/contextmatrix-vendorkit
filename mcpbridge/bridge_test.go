@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -166,6 +167,23 @@ func TestBridgeServesTools(t *testing.T) {
 	assert.Equal(t, "hi", text(t, res.Content[0]))
 }
 
+// The CLI parses this _meta key to keep a large bridged result whole.
+func TestBridgeToolsDeclareResultSize(t *testing.T) {
+	sess := connect(t, startBridge(t, testRegistry()))
+
+	list, err := sess.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, list.Tools)
+
+	for _, tl := range list.Tools {
+		size, ok := tl.Meta["anthropic/maxResultSizeChars"].(float64)
+		require.True(t, ok, "tool %s declares no result size", tl.Name)
+		// 131072 is the largest backend tool-output cap; 400000 the largest size probed whole.
+		assert.GreaterOrEqual(t, size, float64(131072), tl.Name)
+		assert.LessOrEqual(t, size, float64(400000), tl.Name)
+	}
+}
+
 func TestBridgeToolErrorIsMCPError(t *testing.T) {
 	sess := connect(t, startBridge(t, testRegistry()))
 
@@ -307,6 +325,32 @@ func TestBridgeClose(t *testing.T) {
 	var ne net.Error
 	if errors.As(err, &ne) {
 		assert.False(t, ne.Timeout(), "the bridge still holds the connection open after Close")
+	}
+}
+
+// Not parallel: it counts the process's goroutines. The bridge closes before
+// the client, so no DELETE ends the server sessions.
+func TestBridgeCloseEndsAbandonedSessions(t *testing.T) {
+	const cycles, margin = 20, 3
+
+	base := runtime.NumGoroutine()
+
+	for range cycles {
+		b, err := Start(t.Context(), "cm", testRegistry())
+		require.NoError(t, err)
+
+		sess := connect(t, b)
+		call(t, sess, "echo", map[string]any{"text": "hi"})
+
+		require.NoError(t, b.Close())
+
+		_ = sess.Close()
+	}
+
+	settled := assert.Eventually(t, func() bool { return runtime.NumGoroutine() <= base+margin },
+		5*time.Second, 20*time.Millisecond)
+	if !settled {
+		t.Logf("%d goroutines after %d cycles, baseline %d", runtime.NumGoroutine(), cycles, base)
 	}
 }
 
@@ -520,7 +564,7 @@ func TestToResultContent(t *testing.T) {
 	}{
 		{"text and image", tools.Result{Text: "see", Images: []llm.ImageURL{{URL: picURL}}}, []string{"text:see", "image:image/png"}},
 		{"image only", tools.Result{Images: []llm.ImageURL{{URL: picURL}}}, []string{"image:image/png"}},
-		{"malformed image only", tools.Result{Images: []llm.ImageURL{{URL: "not-a-data-url"}}}, []string{"text:[image omitted: unsupported or malformed image URL]"}},
+		{"malformed image only", tools.Result{Images: []llm.ImageURL{{URL: "not-a-data-url"}}}, []string{"text:" + omittedImageNote}},
 		{"empty", tools.Result{}, []string{"text:"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

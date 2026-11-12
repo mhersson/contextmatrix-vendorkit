@@ -14,6 +14,8 @@ import (
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
 	protocol "github.com/mhersson/contextmatrix-protocol"
+
+	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 )
 
 type mapperOpts struct {
@@ -22,7 +24,8 @@ type mapperOpts struct {
 	Secret      string              // always masked in every emitted or returned string
 	OnDelta     func(llm.Delta)
 	OnRateLimit func(RateLimit)
-	Prefix      string // "mcp__cm__", stripped from bridged tool names
+	Prefix      string   // "mcp__cm__", stripped from bridged tool names
+	Servers     []string // Spec.MCPServers names, held to the bridge's init standard
 	Terminal    func() (string, json.RawMessage, bool)
 	Session     bool // per-turn accounting from model_usage_since_last_result
 
@@ -160,6 +163,7 @@ type mapper struct {
 	streamedTotal tokenBuckets
 	subscription  []protocol.SubscriptionUsage
 	lastText      string
+	lastEndTurn   bool // the last closed call ended end_turn with no tool use
 
 	sawResult bool
 	finished  bool
@@ -171,10 +175,8 @@ type mapper struct {
 	toolNames    map[string]string // tool_use id to raw name, for closed calls
 	limit        *UsageLimitError
 	authFailed   bool
-	bridgeErr    error
-	lastRL       RateLimit
+	serverErr    error
 
-	sid     string
 	version string // claude_code_version from init
 	res     harness.Result
 	err     error
@@ -249,24 +251,30 @@ func (m *mapper) feed(line []byte) verdict {
 	return keepGoing
 }
 
-// sessionID is the session_id init reported; "" before init.
-func (m *mapper) sessionID() string { return m.sid }
-
 func (m *mapper) onInit(l streamLine) {
-	m.sid = l.SessionID
 	m.version = l.ClaudeCodeVersion
 
 	// "mcp__cm__" names the server "cm".
-	server := strings.TrimSuffix(strings.TrimPrefix(m.o.Prefix, "mcp__"), "__")
-	if server == "" {
-		return
-	}
+	bridge := strings.TrimSuffix(strings.TrimPrefix(m.o.Prefix, "mcp__"), "__")
 
 	for _, s := range l.MCPServers {
-		if s.Name == server && s.Status == "failed" {
-			m.bridgeErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP bridge server %q failed to start", server)))
-			m.halted = true
+		if s.Status != "failed" && s.Status != "needs-auth" {
+			continue
 		}
+
+		switch {
+		case slices.Contains(m.o.Servers, s.Name):
+			e := &MCPServerError{Server: s.Name, Status: s.Status}
+			m.serverErr = &maskedError{text: m.mask(e.Error()), err: e}
+		case bridge != "" && s.Name == bridge:
+			m.serverErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP server %q reported %s", s.Name, s.Status)))
+		default:
+			continue
+		}
+
+		m.halted = true
+
+		return
 	}
 }
 
@@ -306,8 +314,8 @@ func (m *mapper) finish(procErr error) (harness.Result, error) {
 	switch {
 	case m.limit != nil:
 		m.conclude("error", m.limit)
-	case m.bridgeErr != nil:
-		m.conclude("error", m.bridgeErr)
+	case m.serverErr != nil:
+		m.conclude("error", m.serverErr)
 	case m.backstop:
 		// vendorkit stopped the process itself, so procErr says nothing.
 		m.conclude("done", nil)
@@ -602,8 +610,6 @@ func (m *mapper) noteTerminal(id string) {
 
 func (m *mapper) onRateLimit(info *rateLimitInfo) {
 	rl := parseRateLimit(info)
-	m.lastRL = rl
-
 	// Keep the last known windows: an event without any says nothing new.
 	if len(rl.Windows) > 0 {
 		m.subscription = slices.Clone(rl.Windows)
@@ -641,13 +647,9 @@ func isUsageLimitText(text string) bool {
 	return strings.HasPrefix(text, limitPrefix) || strings.Contains(strings.ToLower(text), "usage limit")
 }
 
-// resultLimit reports a usage limit a 429 result carried. Only a rejected
-// rate_limit_event names the binding window; an allowed one may be another's.
+// resultLimit reports a usage limit a 429 result carried, named by its text.
+// A rejected rate_limit_event halts the mapper, so its result is never fed.
 func (m *mapper) resultLimit(text string) *UsageLimitError {
-	if m.lastRL.Status == "rejected" {
-		return m.usageLimit(m.lastRL)
-	}
-
 	if rest, ok := strings.CutPrefix(text, limitPrefix); ok {
 		for _, w := range limitWindows {
 			if strings.HasPrefix(rest, w.name) {
@@ -680,6 +682,8 @@ func (m *mapper) closeCall() {
 	if finishReason == "" {
 		finishReason = c.lineStop
 	}
+
+	m.lastEndTurn = finishReason == "end_turn" && len(c.tools) == 0
 
 	m.emit(events.ModelResponse, map[string]any{
 		"turn": c.turn, "content": m.mask(content), "content_len": len(content),
@@ -780,7 +784,7 @@ func (m *mapper) onResult(l streamLine) {
 }
 
 // outcome judges success by is_error, never subtype: an auth failure reports
-// subtype success.
+// subtype success. The exception is a budget stop after a final answer (done).
 func (m *mapper) outcome(l streamLine) (string, error) {
 	switch {
 	case m.authFailed || (l.IsError && strings.HasPrefix(l.Result, "Not logged in")):
@@ -792,6 +796,13 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 	case l.Subtype == "error_max_turns":
 		return "max_turns", nil
 	case l.Subtype == "error_max_budget_usd":
+		// The CLI checks the budget after a call, so a final answer can cross it.
+		if m.lastEndTurn {
+			m.res.Output = m.mask(m.lastText)
+
+			return "done", nil
+		}
+
 		return "max_cost", nil
 	case !l.IsError:
 		// terminal_reason is not consulted, so a release that drops or renames
@@ -814,7 +825,8 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 // conclude records the outcome and emits the closing events: error (for
 // Reason "error"), then a Run's single stop or a Session turn's awaiting_human.
 // A Session's stop comes from the Session when its process ends; a usage limit
-// ends it, so that turn does not await the human.
+// ends it, so that turn does not await the human. A Session turn halted by a
+// configured server emits no error event.
 func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
 	m.res.Messages = m.closedMessages()
@@ -835,7 +847,7 @@ func (m *mapper) conclude(reason string, err error) {
 		}
 
 		m.emit(events.Kind("usage_limit"), data)
-	} else if reason == "error" && m.err != nil {
+	} else if reason == "error" && m.err != nil && !m.resendable() {
 		m.emit(events.ErrorKind, map[string]any{"error": m.err.Error()})
 	}
 
@@ -845,6 +857,14 @@ func (m *mapper) conclude(reason string, err error) {
 	case m.sawResult && m.limit == nil:
 		m.emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": m.res.Turns})
 	}
+}
+
+// resendable reports a Session turn halted by a configured server; the caller
+// resumes and resends it, so the attempt leaves no error event.
+func (m *mapper) resendable() bool {
+	var se *MCPServerError
+
+	return m.o.Session && errors.As(m.err, &se)
 }
 
 // annotate names both versions on an error from an untested release. Typed
@@ -866,4 +886,13 @@ func deref(v *int64) int64 {
 	}
 
 	return *v
+}
+
+func serverNames(servers []mcpbridge.ServerConfig) []string {
+	names := make([]string, 0, len(servers))
+	for _, s := range servers {
+		names = append(names, s.Name)
+	}
+
+	return names
 }

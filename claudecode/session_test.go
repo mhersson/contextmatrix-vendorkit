@@ -15,10 +15,12 @@ import (
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
+	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mhersson/contextmatrix-vendorkit/internal/fakeclaude"
+	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 	"github.com/mhersson/contextmatrix-vendorkit/subproc"
 )
 
@@ -624,6 +626,40 @@ func TestSessionUsageLimitFromResultEndsSession(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second)
 }
 
+// serverStatusFixture is real/t1.jsonl with its init reporting server in status.
+func serverStatusFixture(t *testing.T, server, status string) string {
+	t.Helper()
+
+	data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"`+server+`","status":"`+status+`"}]`)
+	path := filepath.Join(t.TempDir(), "failed-server.jsonl")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	return path
+}
+
+func TestSessionConfiguredServerFailedEndsSession(t *testing.T) {
+	for _, status := range []string{"failed", "needs-auth"} {
+		t.Run(status, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{serverStatusFixture(t, "extra", status)}})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+			s := startFake(t, f, sessionOpts())
+
+			res, err := s.Send(boundCtx(t), "work", nil)
+			require.Error(t, err)
+
+			var se *MCPServerError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, "extra", se.Server)
+			assert.Equal(t, status, se.Status)
+			assert.Equal(t, "error", res.Reason)
+			assert.True(t, processGone(f.recorded(t).PID), "the process outlived the failed server")
+
+			_, err = s.Send(boundCtx(t), "again", nil)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestSessionStartCanceled(t *testing.T) {
 	f := newFakeSession(t, fakeclaude.Scenario{NoInit: true})
 
@@ -747,6 +783,113 @@ func TestSessionFailsClosedOnUnreadableAccount(t *testing.T) {
 			require.ErrorIs(t, err, errNotSubscription, "an unreadable account fails as an account error, not a gate timeout")
 			assert.Less(t, time.Since(start), 5*time.Second)
 			assert.Nil(t, s)
+		})
+	}
+}
+
+func TestSessionServerHaltEmissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, server string
+		typed        bool
+	}{
+		{"configured server", "extra", true},
+		{"bridge", serverName, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{serverStatusFixture(t, tc.server, "failed")}})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+
+			var deltas []llm.Delta
+
+			f.spec.OnDelta = func(d llm.Delta) { deltas = append(deltas, d) }
+			s := startFake(t, f, sessionOpts())
+
+			_, err := s.Send(boundCtx(t), "work", nil)
+			require.Error(t, err)
+
+			var se *MCPServerError
+			assert.Equal(t, tc.typed, errors.As(err, &se))
+
+			evs := f.log.events(t)
+
+			assert.Empty(t, deltas, "no API call started")
+			require.Len(t, ofKind(evs, events.UserInput), 1)
+			require.Len(t, stops(evs), 1)
+
+			if tc.typed {
+				assert.Empty(t, ofKind(evs, events.ErrorKind))
+			} else {
+				assert.Len(t, ofKind(evs, events.ErrorKind), 1)
+			}
+		})
+	}
+}
+
+func TestSessionServerHaltKeepsLastGoodTranscript(t *testing.T) {
+	storedFiles := func(home string) map[string][]byte {
+		out := map[string][]byte{}
+		matches, err := filepath.Glob(filepath.Join(sessionStore(home), "*", "*.jsonl"))
+		require.NoError(t, err)
+
+		for _, m := range matches {
+			data, err := os.ReadFile(m)
+			require.NoError(t, err)
+
+			out[m] = data
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name      string
+		server    string // the server init reports failed
+		completed bool
+		typed     bool // the halt is a *MCPServerError, so the turn is discarded
+	}{
+		{"configured server after a completed turn", "extra", true, true},
+		{"configured server on the first turn", "extra", false, true},
+		{"bridge after a completed turn", serverName, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			halt := serverStatusFixture(t, tc.server, "failed")
+			turns := []string{halt}
+
+			if tc.completed {
+				turns = []string{t7bTurns(t)[0], halt}
+			}
+
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: turns})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+			s := startFake(t, f, sessionOpts())
+
+			var before map[string][]byte
+
+			if tc.completed {
+				_, err := s.Send(boundCtx(t), t7bFirst, nil)
+				require.NoError(t, err)
+
+				before = storedFiles(f.spec.Home)
+				require.NotEmpty(t, before)
+			}
+
+			_, err := s.Send(boundCtx(t), "work", nil)
+
+			var se *MCPServerError
+			require.Equal(t, tc.typed, errors.As(err, &se))
+			require.Error(t, err)
+			require.NoError(t, s.Close())
+
+			after := storedFiles(f.spec.Home)
+
+			switch {
+			case !tc.typed:
+				assert.NotEqual(t, before, after)
+			case tc.completed:
+				assert.Equal(t, before, after)
+			default:
+				assert.Empty(t, after)
+			}
 		})
 	}
 }

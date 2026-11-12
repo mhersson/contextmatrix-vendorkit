@@ -35,6 +35,7 @@ type Bridge struct {
 	tools     []string
 	terminals []string
 
+	server    *mcp.Server
 	srv       *http.Server
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -85,17 +86,18 @@ func Start(ctx context.Context, name string, reg *tools.Registry) (*Bridge, erro
 		return nil, fmt.Errorf("mcpbridge listen: %w", err)
 	}
 
+	server := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
+
 	runCtx, cancel := context.WithCancel(ctx)
 	b := &Bridge{
 		name:      name,
 		port:      ln.Addr().(*net.TCPAddr).Port,
 		bearer:    bearer,
 		hookToken: hookToken,
+		server:    server,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 	}
-
-	server := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
 
 	if reg != nil {
 		for _, t := range reg.All() {
@@ -164,7 +166,8 @@ func (b *Bridge) HookURL() string {
 }
 
 // Close stops the server, cancels in-flight tool calls and waits for them to
-// return, so no tool runs once it does. It is idempotent.
+// return, so no tool runs once it does, then ends every MCP session. It is
+// idempotent.
 func (b *Bridge) Close() error {
 	b.closeOnce.Do(func() {
 		b.callMu.Lock()
@@ -173,12 +176,24 @@ func (b *Bridge) Close() error {
 
 		b.cancel()
 
+		var errs []error
 		if err := b.srv.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			b.closeErr = fmt.Errorf("mcpbridge close: %w", err)
+			errs = append(errs, fmt.Errorf("mcpbridge close: %w", err))
 		}
 
 		<-b.done
 		b.inflight.Wait()
+
+		// The handler has no session timeout: a session the client never
+		// DELETEd keeps its reader goroutine, and so the Bridge, alive. Closing
+		// after the tool calls return means each Close waits on no tool.
+		for ss := range b.server.Sessions() {
+			if err := ss.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("mcpbridge close session: %w", err))
+			}
+		}
+
+		b.closeErr = errors.Join(errs...)
 	})
 
 	return b.closeErr

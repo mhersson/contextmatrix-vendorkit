@@ -15,7 +15,9 @@ Usage: mock.py PORT LOG SCENARIO [TOOL_INPUT_JSON [HOLD_FILE]]
   SCENARIO smoke: for claudecode's smoke tests, by the request's tools. With mcp__cm__finish:
                  finish {} (refused), then finish with commit_message and summary, then "all done"
                  (the stop hook should end the run before it). With Bash: one Bash tool_use whose
-                 command writes its PID to bash.pid in the cwd and execs a long sleep.
+                 command writes its PID to bash.pid in the cwd and execs a long sleep. With mcp__cm__big:
+                 one big {} call; after its tool_result, answer the JSON {"len", "tail"} (the result
+                 text's length and last 32 chars) and end the turn.
   HOLD_FILE:     the first streamed answer waits until this file exists.
 Every request is appended to LOG as one JSON line (auth headers, parameters, messages, system
 prompt length, hash and markers); the full system text goes to LOG.system.<n>.txt.
@@ -38,6 +40,7 @@ MAX_TOOL_ANSWERS = 6  # guard against a tool loop when a probe goes wrong
 PARALLEL = ["one", "two", "three", "four", "five"]
 PAUSE = 0.4
 FINISH = "mcp__cm__finish"
+BIG = "mcp__cm__big"
 SLEEP = "mcp__cm__sleep"
 FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
 SLEEPER = {"command": "sh -c 'echo $$ > bash.pid; exec sleep 300'", "description": "Sleep"}
@@ -66,6 +69,20 @@ def tool_results(msgs):
                for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result")
 
 
+def last_result_text(msgs):
+    """The text of the newest tool_result, from a string or a list of text blocks."""
+    for m in reversed(msgs):
+        if not isinstance(m.get("content"), list):
+            continue
+        for b in reversed(m["content"]):
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                if isinstance(c, list):
+                    c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
+                return c if isinstance(c, str) else ""
+    return ""
+
+
 def tool_answer(body, n):
     """The (name, input) of the tool_use to answer with, or None for text."""
     msgs = body.get("messages", [])
@@ -77,6 +94,8 @@ def tool_answer(body, n):
     if SCENARIO == "smoke":
         names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
         done = tool_results(msgs)
+        if BIG in names and done == 0:
+            return BIG, {}
         if FINISH in names and done < len(FINISH_INPUTS):
             return FINISH, FINISH_INPUTS[done]
         if "Bash" in names and done == 0:
@@ -193,7 +212,11 @@ class H(BaseHTTPRequestHandler):
                 "type": "input_json_delta", "partial_json": json.dumps(answer[1])}}))
             stop = "tool_use"
         else:
-            text = {"bash": "done", "idle": "done", "parallel": "done", "smoke": "all done"}.get(SCENARIO, "ok")
+            if SCENARIO == "smoke" and BIG in [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]:
+                got = last_result_text(body.get("messages", []))
+                text = json.dumps({"len": len(got), "tail": got[-32:]})
+            else:
+                text = {"bash": "done", "idle": "done", "parallel": "done", "smoke": "all done"}.get(SCENARIO, "ok")
             w(sse("content_block_start", {"type": "content_block_start", "index": 0,
                                           "content_block": {"type": "text", "text": ""}}))
             w(sse("content_block_delta", {"type": "content_block_delta", "index": 0,

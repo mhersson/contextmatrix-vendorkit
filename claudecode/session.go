@@ -33,7 +33,6 @@ type Session struct {
 
 	// The last rate-limit windows, carried into the next turn; guarded by sem.
 	subscription []protocol.SubscriptionUsage
-	lastRL       RateLimit
 
 	ready chan struct{} // closed at the initialize answer
 	ended chan struct{} // closed once the end path has run
@@ -68,8 +67,9 @@ type turn struct {
 // --output-format stream-json` process and returns once it is ready to accept
 // the first message: claude has answered the initialize request, since a
 // message written before that can be dropped. ctx bounds only the start; the
-// start fails when ctx ends or no answer comes within 30 s. Task, TaskImages
-// and MaxBudgetUSD are unused; MaxTurns applies per turn. The session is
+// start fails when ctx ends or no answer comes within 30 s. A non-empty Task
+// fails validation (send it with Send); TaskImages and MaxBudgetUSD are
+// ignored (Send takes the images). MaxTurns applies per turn. The session is
 // always persisted under Home: SessionID and Resume work as in Run, and with
 // neither it gets a fresh ID.
 func StartSession(ctx context.Context, spec Spec) (*Session, error) {
@@ -160,7 +160,8 @@ func startSession(ctx context.Context, spec Spec, o runOpts) (*Session, error) {
 // waiting for its turn, ends the session (as Close) and returns Reason
 // "canceled" with an error wrapping context.Cause(ctx); a result that came
 // first keeps its outcome. Send emits user_input first and state_change
-// awaiting_human after the turn, and stores the transcript before it returns.
+// awaiting_human after the turn, and stores the transcript before it returns,
+// except for a turn halted by a configured MCP server (*MCPServerError).
 // Result.Messages holds this turn only. A usage limit ends the session. Send on
 // a session whose process has exited returns an error at once. Never call it
 // from Spec.OnDelta, Spec.OnRateLimit or the Emitter's writers: the session
@@ -186,9 +187,9 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 	m := newMapper(mapperOpts{
 		Emitter: s.spec.Emitter, Redact: s.spec.Redact, Secret: s.spec.OAuthToken,
 		OnDelta: s.spec.OnDelta, OnRateLimit: s.spec.OnRateLimit,
-		Prefix: bridgePrefix, Session: true, Task: text, TaskImages: images,
+		Prefix: bridgePrefix, Servers: serverNames(s.spec.MCPServers), Session: true, Task: text, TaskImages: images,
 	})
-	m.subscription, m.lastRL = s.subscription, s.lastRL
+	m.subscription = s.subscription
 
 	t := &turn{m: m, done: make(chan struct{})}
 
@@ -230,7 +231,7 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 	// The end path closes stdin before it closes done, so this cannot block.
 	<-wrote
 
-	s.subscription, s.lastRL = m.subscription, m.lastRL
+	s.subscription = m.subscription
 
 	return t.res, t.err
 }
@@ -328,8 +329,9 @@ func (s *Session) read() {
 
 		switch {
 		case v == stopNow || t.m.limit != nil:
-			// A usage limit, from a rate_limit_event or the result, or a failed
-			// bridge server stops the process; the end path finishes the turn.
+			// A usage limit, from a rate_limit_event or the result, or an MCP
+			// server reporting failed or needs-auth stops the process; the end
+			// path finishes the turn.
 			halted = true
 
 			_ = s.requestEnd("error", nil)
@@ -359,7 +361,8 @@ func (s *Session) completeTurn(t *turn) {
 }
 
 // end runs once, on the reader goroutine, after the process is reaped: it
-// finishes an in-flight turn, stores the transcript, emits the session's one
+// finishes an in-flight turn, stores the transcript (unless a configured MCP
+// server halted the turn), emits the session's one
 // stop, closes the bridge and removes the run dir.
 func (s *Session) end(ready bool, procErr error) {
 	s.mu.Lock()
@@ -393,8 +396,13 @@ func (s *Session) end(ready bool, procErr error) {
 
 	var errs []error
 
-	if err := storeTranscripts(s.spec.Home, s.l.rd.config, s.spec.OAuthToken); err != nil {
-		errs = append(errs, maskErr(s.mask, err))
+	// A turn halted by a configured server may already have reached the
+	// transcript; the store keeps the last completed turn instead.
+	var halted *MCPServerError
+	if t == nil || !errors.As(t.err, &halted) {
+		if err := storeTranscripts(s.spec.Home, s.l.rd.config, s.spec.OAuthToken); err != nil {
+			errs = append(errs, maskErr(s.mask, err))
+		}
 	}
 
 	s.spec.Emitter.Emit(events.StateChange, map[string]any{"stop": reason, "turns": s.turns})
