@@ -632,6 +632,24 @@ func TestMapperMasksSecret(t *testing.T) {
 		assert.NotContains(t, string(transcript), secret)
 	})
 
+	t.Run("budget done output", func(t *testing.T) {
+		data := rewrite(readFixture(t, "synthetic/max_budget_end_turn.jsonl"), `"text":"ok"`, `"text":"`+secret+`"`, `"text_delta","text":"ok"`, `"text_delta","text":"`+secret+`"`)
+		require.Contains(t, string(data), secret)
+
+		_, res, err := replayData(t, data, mapperOpts{Secret: secret}, nil)
+		require.NoError(t, err)
+		require.Equal(t, "done", res.Reason)
+		assert.NotContains(t, res.Output, secret)
+	})
+
+	t.Run("failed server name", func(t *testing.T) {
+		data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"`+secret+`","status":"failed"}]`)
+
+		_, _, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__", Servers: []string{secret}, Secret: secret}, errors.New("signal: killed"))
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), secret)
+	})
+
 	t.Run("process error", func(t *testing.T) {
 		procErr := errors.New("exit status 1: " + secret)
 
@@ -1253,7 +1271,10 @@ func TestMapperUntestedVersionProceeds(t *testing.T) {
 	assert.Contains(t, err.Error(), Version)
 
 	crash := readFixture(t, "synthetic/crash.jsonl")
-	_, _, want := replayData(t, rewrite(crash, `"claude_code_version":"2.1.322",`, ""), mapperOpts{Prefix: cmlocal}, nil)
+	stripped := rewrite(crash, `"claude_code_version":"`+Version+`",`, "")
+	require.NotEqual(t, crash, stripped, "the fixture carries no version to strip")
+
+	_, _, want := replayData(t, stripped, mapperOpts{Prefix: cmlocal}, nil)
 	require.Error(t, want)
 
 	_, _, err = replay(t, "synthetic/crash.jsonl", mapperOpts{Prefix: cmlocal})

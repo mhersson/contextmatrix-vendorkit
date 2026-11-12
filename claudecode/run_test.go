@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mhersson/contextmatrix-vendorkit/internal/fakeclaude"
+	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 	"github.com/mhersson/contextmatrix-vendorkit/subproc"
 )
 
@@ -467,6 +468,17 @@ func TestRunUsageLimit(t *testing.T) {
 	var ule *UsageLimitError
 	require.ErrorAs(t, err, &ule)
 	assert.Equal(t, "seven_day", ule.Window)
+	assert.Equal(t, "error", res.Reason)
+	assert.True(t, processGone(f.recorded(t).PID))
+}
+
+func TestRunConfiguredServerFailed(t *testing.T) {
+	f := newFakeRun(t, fakeclaude.Scenario{Replay: failedServerFixture(t, "extra"), Hang: true})
+	f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+
+	res, err := Run(boundCtx(t), f.spec)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"extra"`)
 	assert.Equal(t, "error", res.Reason)
 	assert.True(t, processGone(f.recorded(t).PID))
 }
