@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mhersson/contextmatrix-harness/events"
+	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -161,6 +162,62 @@ func TestSmokeBridgedResultWhole(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(res.Output), &got), res.Output)
 	assert.Equal(t, 60_000+len(marker), got.Len)
 	assert.True(t, strings.HasSuffix(got.Tail, marker), got.Tail)
+}
+
+// TestSmokeNoAttribution proves Run and Session start claude with its commit
+// and PR attribution off: the mock answers with the attribution texts it found
+// in the request that carried the task.
+func TestSmokeNoAttribution(t *testing.T) {
+	binary, mockURL := smokeTarget(t)
+
+	const task = "Commit the change. REPORT-TASK-7f3a"
+
+	for _, tc := range []struct {
+		name    string
+		session bool
+	}{
+		{"run", false},
+		{"session", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, opts, _ := smokeRun(t, binary, mockURL)
+			spec.BuiltinTools = []string{"Bash"}
+			spec.Tools = tools.NewRegistry(stubTool{name: "report", exec: func(map[string]any) (tools.Result, error) {
+				return tools.Result{}, errors.New("the mock answers report requests without calling it")
+			}})
+
+			var res harness.Result
+
+			if tc.session {
+				s, err := startSession(t.Context(), spec, opts)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = s.Close() })
+
+				res, err = s.Send(t.Context(), task, nil)
+				require.NoError(t, err)
+			} else {
+				spec.Task = task
+
+				var err error
+
+				res, err = run(t.Context(), spec, opts)
+				require.NoError(t, err)
+			}
+
+			var got struct {
+				Attribution map[string][]string `json:"attribution"`
+				Task        bool                `json:"task"`
+			}
+
+			require.NoError(t, json.Unmarshal([]byte(res.Output), &got), res.Output)
+			require.True(t, got.Task, "the mock did not see the task in the request it reported on")
+			require.Len(t, got.Attribution, 3, "system, tools and messages")
+
+			for part, found := range got.Attribution {
+				assert.Empty(t, found, part)
+			}
+		})
+	}
 }
 
 // TestSmokeCancelKillsBashChild cancels a run while the Bash built-in waits on

@@ -193,6 +193,40 @@ func TestInvocationFiles(t *testing.T) {
 		assert.False(t, re.MatchString("mcp__cm__finish2"))
 	})
 
+	// The CLI reads settings.attribution; empty texts turn its commit and PR
+	// attribution off for every child, Run or Session, hook or not.
+	t.Run("attribution off", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			session   bool
+			terminals []string
+		}{
+			{"run with hook", false, testBridge().Terminals},
+			{"run without hook", false, nil},
+			{"session with hook", true, testBridge().Terminals},
+			{"session without hook", true, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s := testSpec()
+				if tc.session {
+					s.Task = ""
+				}
+
+				bi := testBridge()
+				bi.Terminals = tc.terminals
+
+				_, files, err := buildInvocation(s, bi, testRun, tc.session)
+				require.NoError(t, err)
+
+				var settings map[string]json.RawMessage
+
+				require.NoError(t, json.Unmarshal(files[filepath.Join(testRun, "settings.json")], &settings))
+				require.Contains(t, settings, "attribution")
+				assert.JSONEq(t, `{"commit":"","pr":""}`, string(settings["attribution"]))
+			})
+		}
+	})
+
 	t.Run("no terminals no hook", func(t *testing.T) {
 		bi := testBridge()
 		bi.Terminals = nil

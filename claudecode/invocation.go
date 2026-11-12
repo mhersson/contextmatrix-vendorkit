@@ -62,7 +62,16 @@ type hookMatcher struct {
 }
 
 type settingsFile struct {
-	Hooks map[string][]hookMatcher `json:"hooks,omitempty"`
+	Hooks       map[string][]hookMatcher `json:"hooks,omitempty"`
+	Attribution attribution              `json:"attribution"`
+}
+
+// attribution is Claude Code's commit and PR attribution text. Empty texts stop
+// 2.1.322 from telling the model to add its Co-Authored-By trailer and PR footer;
+// a resumed session gets a reminder that overrides any earlier attribution guidance.
+type attribution struct {
+	Commit string `json:"commit"`
+	PR     string `json:"pr"`
 }
 
 // buildInvocation returns the claude argv and the per-run file contents keyed
