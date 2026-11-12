@@ -1327,20 +1327,6 @@ func TestMapperBridgeFailed(t *testing.T) {
 	})
 }
 
-func TestMapperInitCaptures(t *testing.T) {
-	m := newMapper(mapperOpts{})
-	assert.Empty(t, m.sessionID())
-
-	line := bytes.Lines(readFixture(t, "real/t1.jsonl"))
-	for l := range line {
-		m.feed(bytes.TrimSpace(l))
-
-		break
-	}
-
-	assert.Equal(t, "e7d93133-865e-4f91-b7e2-348d66e79b59", m.sessionID())
-}
-
 func TestMapperBackstopAfterTerminal(t *testing.T) {
 	args := json.RawMessage(finishInput)
 

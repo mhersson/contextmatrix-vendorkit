@@ -110,8 +110,8 @@ How they ran (`probe/scripts/`):
 - Smoke tests: `smoke.sh`, inside `jail.sh`, runs `TestSmoke*` from a test
   binary (`go test -c -o <path> ./claudecode`, passed as `SMOKE_TEST`)
   against `mock.py`'s `smoke` scenario. They drive the real CLI through `Run`
-  with a dummy OAuth token, a dummy API key and the mock's base URL; the tests
-  skip unless `VENDORKIT_SMOKE_CLAUDE` and `VENDORKIT_SMOKE_MOCK` are set.
+  with a dummy OAuth token and the mock's base URL, so the real CLI's account
+  answer goes through `checkAccount`; the tests skip unless `VENDORKIT_SMOKE_CLAUDE` and `VENDORKIT_SMOKE_MOCK` are set.
 
 ## Decisions for 2.1.322
 

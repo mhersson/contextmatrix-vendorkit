@@ -177,7 +177,6 @@ type mapper struct {
 	authFailed   bool
 	serverErr    error
 
-	sid     string
 	version string // claude_code_version from init
 	res     harness.Result
 	err     error
@@ -252,11 +251,7 @@ func (m *mapper) feed(line []byte) verdict {
 	return keepGoing
 }
 
-// sessionID is the session_id init reported; "" before init.
-func (m *mapper) sessionID() string { return m.sid }
-
 func (m *mapper) onInit(l streamLine) {
-	m.sid = l.SessionID
 	m.version = l.ClaudeCodeVersion
 
 	// "mcp__cm__" names the server "cm".
