@@ -92,6 +92,10 @@ Events are the harness kinds, in harness order. The ones that differ:
 - The bridge's `--mcp-config` entry carries a per-server `timeout` of 1e8 ms.
   Without it 2.1.322 cuts a bridged call at 60 s, since the bridge answers only
   when the tool returns.
+- Background Bash tasks are disabled in every child (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`,
+  not overridable through `Spec.Env`). A task finishing between `Session` turns
+  makes 2.1.322 run an unsolicited turn that `Session` would drop or hand to an
+  overlapping `Send`; the CLI now refuses `run_in_background`.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
   tool starts children with `setsid`, which leaves that group; on Linux
   `subproc` kills such escaped descendants before the SIGKILL escalation. On

@@ -182,10 +182,11 @@ var (
 // childEnv builds the claude process env from Spec.Env.
 func childEnv(s Spec, configDir string) []string {
 	set := map[string]string{
-		"HOME":                    s.Home,
-		"CLAUDE_CONFIG_DIR":       configDir,
-		"CLAUDE_CODE_OAUTH_TOKEN": s.OAuthToken,
-		"DISABLE_AUTOUPDATER":     "1",
+		"HOME":                                 s.Home,
+		"CLAUDE_CONFIG_DIR":                    configDir,
+		"CLAUDE_CODE_OAUTH_TOKEN":              s.OAuthToken,
+		"DISABLE_AUTOUPDATER":                  "1",
+		"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 	}
 	maps.Copy(set, noProxyEnv(s.Env))
 
