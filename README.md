@@ -54,9 +54,14 @@ Errors to branch on:
   would serve the call on extra usage (`isUsingOverage`). Park or show the
   state; never retry.
 - `ErrNotLoggedIn` (`errors.Is`): Claude Code did not accept the token.
-- A bridge or `Spec.MCPServers` server that Claude Code reports `failed` or
-  `needs-auth` at init stops the run, or ends the session, with an error naming
-  it (`Result.Reason` `"error"`).
+- `*MCPServerError` (`errors.As`): Claude Code reported a `Spec.MCPServers`
+  server `failed` or `needs-auth` at init; it carries `Server` and `Status`. The
+  run stops, or the session ends (`Result.Reason` `"error"`). A bridge server
+  reported the same way stops it with an error naming the bridge, not this type.
+  2.1.322 re-reports each server's status at every `Session` turn's init, and
+  after about 16 s of downtime a server stays failed for the rest of that
+  process, even once it is back. The halt fires at init, before the model acts,
+  so a caller may resume a fresh session and resend that turn once.
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.
@@ -102,12 +107,13 @@ Events are the harness kinds, in harness order. The ones that differ:
 - The bridge's `--mcp-config` entry carries a per-server `timeout` of 1e8 ms.
   Without it 2.1.322 cuts a bridged call at 60 s, since the bridge answers only
   when the tool returns.
-- Background Bash tasks are disabled in every child (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`,
-  not overridable through `Spec.Env`). A task finishing between `Session` turns
-  makes 2.1.322 run an unsolicited turn that `Session` would drop or hand to an
-  overlapping `Send`; with it set, the CLI refuses `run_in_background`. A foreground Bash call that
-  outlives its `timeout` is then ended (exit 143, "Command timed out"), not moved
-  to the background.
+- Background Bash tasks are disabled in every child
+  (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, not overridable through
+  `Spec.Env`). A task finishing between `Session` turns makes 2.1.322 run an
+  unsolicited turn that `Session` would drop or hand to an overlapping `Send`;
+  with it set, the CLI refuses `run_in_background`. A foreground Bash call that
+  outlives its `timeout` is then ended (exit 143, "Command timed out"), not
+  moved to the background.
 - The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
   tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
   with a 2 KB `<persisted-output>` preview and a file path

@@ -262,12 +262,19 @@ func (m *mapper) onInit(l streamLine) {
 			continue
 		}
 
-		if (bridge != "" && s.Name == bridge) || slices.Contains(m.o.Servers, s.Name) {
+		switch {
+		case slices.Contains(m.o.Servers, s.Name):
+			e := &MCPServerError{Server: s.Name, Status: s.Status}
+			m.serverErr = &maskedError{text: m.mask(e.Error()), err: e}
+		case bridge != "" && s.Name == bridge:
 			m.serverErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP server %q reported %s", s.Name, s.Status)))
-			m.halted = true
-
-			return
+		default:
+			continue
 		}
+
+		m.halted = true
+
+		return
 	}
 }
 

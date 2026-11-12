@@ -473,14 +473,22 @@ func TestRunUsageLimit(t *testing.T) {
 }
 
 func TestRunConfiguredServerFailed(t *testing.T) {
-	f := newFakeRun(t, fakeclaude.Scenario{Replay: failedServerFixture(t, "extra"), Hang: true})
-	f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+	for _, status := range []string{"failed", "needs-auth"} {
+		t.Run(status, func(t *testing.T) {
+			f := newFakeRun(t, fakeclaude.Scenario{Replay: serverStatusFixture(t, "extra", status), Hang: true})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
 
-	res, err := Run(boundCtx(t), f.spec)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"extra"`)
-	assert.Equal(t, "error", res.Reason)
-	assert.True(t, processGone(f.recorded(t).PID))
+			res, err := Run(boundCtx(t), f.spec)
+			require.Error(t, err)
+
+			var se *MCPServerError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, "extra", se.Server)
+			assert.Equal(t, status, se.Status)
+			assert.Equal(t, "error", res.Reason)
+			assert.True(t, processGone(f.recorded(t).PID))
+		})
+	}
 }
 
 func TestRunWaitsForInitialize(t *testing.T) {

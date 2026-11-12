@@ -625,11 +625,11 @@ func TestSessionUsageLimitFromResultEndsSession(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second)
 }
 
-// failedServerFixture is real/t1.jsonl with its init reporting the server failed.
-func failedServerFixture(t *testing.T, server string) string {
+// serverStatusFixture is real/t1.jsonl with its init reporting server in status.
+func serverStatusFixture(t *testing.T, server, status string) string {
 	t.Helper()
 
-	data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"`+server+`","status":"failed"}]`)
+	data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"`+server+`","status":"`+status+`"}]`)
 	path := filepath.Join(t.TempDir(), "failed-server.jsonl")
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 
@@ -637,18 +637,26 @@ func failedServerFixture(t *testing.T, server string) string {
 }
 
 func TestSessionConfiguredServerFailedEndsSession(t *testing.T) {
-	f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{failedServerFixture(t, "extra")}})
-	f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
-	s := startFake(t, f, sessionOpts())
+	for _, status := range []string{"failed", "needs-auth"} {
+		t.Run(status, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{serverStatusFixture(t, "extra", status)}})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+			s := startFake(t, f, sessionOpts())
 
-	res, err := s.Send(boundCtx(t), "work", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"extra"`)
-	assert.Equal(t, "error", res.Reason)
-	assert.True(t, processGone(f.recorded(t).PID), "the process outlived the failed server")
+			res, err := s.Send(boundCtx(t), "work", nil)
+			require.Error(t, err)
 
-	_, err = s.Send(boundCtx(t), "again", nil)
-	require.Error(t, err)
+			var se *MCPServerError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, "extra", se.Server)
+			assert.Equal(t, status, se.Status)
+			assert.Equal(t, "error", res.Reason)
+			assert.True(t, processGone(f.recorded(t).PID), "the process outlived the failed server")
+
+			_, err = s.Send(boundCtx(t), "again", nil)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestSessionStartCanceled(t *testing.T) {

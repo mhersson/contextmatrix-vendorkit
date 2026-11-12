@@ -26,5 +26,18 @@ func (e *UsageLimitError) Error() string {
 	return msg
 }
 
+// MCPServerError reports that Claude Code marked a configured MCP server
+// (a Spec.MCPServers entry) failed or needs-auth at init. The halt fires before
+// the model acts, so a caller may start a fresh session (resume) and resend
+// that turn once.
+type MCPServerError struct {
+	Server string // the Spec.MCPServers name
+	Status string // "failed" or "needs-auth", as init reported it
+}
+
+func (e *MCPServerError) Error() string {
+	return fmt.Sprintf("claudecode: MCP server %q reported %s", e.Server, e.Status)
+}
+
 // ErrNotLoggedIn reports that Claude Code did not authenticate with the token.
 var ErrNotLoggedIn = errors.New("claudecode: not logged in")

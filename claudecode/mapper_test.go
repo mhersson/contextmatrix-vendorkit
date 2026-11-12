@@ -648,6 +648,10 @@ func TestMapperMasksSecret(t *testing.T) {
 		_, _, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__", Servers: []string{secret}, Secret: secret}, errors.New("signal: killed"))
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), secret)
+
+		var se *MCPServerError
+		require.ErrorAs(t, err, &se, "masking keeps the typed error reachable")
+		assert.Equal(t, "failed", se.Status)
 	})
 
 	t.Run("process error", func(t *testing.T) {
@@ -1320,6 +1324,14 @@ func TestMapperBridgeFailed(t *testing.T) {
 			assert.Contains(t, err.Error(), `"`+tc.server+`"`)
 			assert.Equal(t, "error", res.Reason)
 			assert.Empty(t, ofKind(evs, events.ModelRequest))
+
+			var se *MCPServerError
+			if tc.server == "extra" {
+				require.ErrorAs(t, err, &se)
+				assert.Equal(t, tc.server, se.Server)
+			} else {
+				assert.NotErrorAs(t, err, &se, "a bridge failure is not the typed error")
+			}
 		})
 	}
 
