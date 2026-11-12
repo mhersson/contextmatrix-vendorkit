@@ -1480,3 +1480,35 @@ func TestMapperParallelToolCalls(t *testing.T) {
 		})
 	}
 }
+
+// TestMapperForeignResultKeepsCallOpen: a result for a tool the open call does
+// not hold must not close it.
+func TestMapperForeignResultKeepsCallOpen(t *testing.T) {
+	const first = `"tool_use_id":"toolu_mock73c9e4_1_0"`
+
+	var data []byte
+
+	for line := range bytes.Lines(readFixture(t, "synthetic/parallel.jsonl")) {
+		data = append(data, line...)
+
+		if bytes.Contains(line, []byte(first)) {
+			data = append(data, bytes.ReplaceAll(line, []byte("toolu_mock73c9e4_1_0"), []byte("toolu_foreign"))...)
+		}
+	}
+
+	evs, res, err := replayData(t, data, mapperOpts{Prefix: "mcp__cm__", Task: "run the commands"}, nil)
+	require.NoError(t, err)
+
+	calls := ofKind(evs, events.ToolCallKind)
+	require.Len(t, calls, 5)
+
+	for i, ev := range calls {
+		raw, ok := ev.Data["raw_args"].(string)
+		require.True(t, ok)
+		assert.Contains(t, raw, `"description"`, "call %d mapped whole", i)
+	}
+
+	assert.Equal(t, 5, res.ToolCallCount)
+	requireValidTranscript(t, res.Messages)
+	assert.Equal(t, []string{"user", "assistant", "tool", "tool", "tool", "tool", "tool", "assistant"}, roles(res.Messages))
+}

@@ -564,6 +564,8 @@ func (m *mapper) onUser(msg *apiMessage) {
 			continue
 		}
 
+		// Any other result leaves the open call open: closing it would cut the
+		// message again.
 		m.onToolResult(r)
 	}
 }

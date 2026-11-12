@@ -169,7 +169,7 @@ class H(BaseHTTPRequestHandler):
             "id": f"msg_mock{RUN}_{n}", "type": "message", "role": "assistant", "model": model, "content": [],
             "stop_reason": None, "stop_sequence": None, "usage": usage0}}))
         answer = tool_answer(body, n)
-        if SCENARIO == "parallel" and not last_is_tool_result(body.get("messages", [])):
+        if SCENARIO == "parallel" and not last_is_tool_result(body.get("messages", [])) and n <= MAX_TOOL_ANSWERS:
             for i, word in enumerate(PARALLEL):
                 args = json.dumps({"command": f"echo {word}", "description": f"Print {word}"})
                 w(sse("content_block_start", {"type": "content_block_start", "index": i, "content_block": {
