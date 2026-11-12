@@ -54,8 +54,11 @@ Errors to branch on:
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.
 
-Success is judged by `is_error`, never `subtype`. An unknown or absent
-terminal reason with `is_error: false` is `done`.
+Success is judged by `is_error`, never `subtype`, with one exception: an
+`error_max_budget_usd` result whose last call ended its turn with no tool use
+ends `done` with that answer as Output. Any other budget stop is `max_cost`
+with no Output. An unknown or absent terminal reason with `is_error: false` is
+`done`.
 
 ### Event contract
 

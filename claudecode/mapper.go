@@ -783,7 +783,7 @@ func (m *mapper) onResult(l streamLine) {
 }
 
 // outcome judges success by is_error, never subtype: an auth failure reports
-// subtype success.
+// subtype success. The exception is a budget stop after a final answer (done).
 func (m *mapper) outcome(l streamLine) (string, error) {
 	switch {
 	case m.authFailed || (l.IsError && strings.HasPrefix(l.Result, "Not logged in")):
