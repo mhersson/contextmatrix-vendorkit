@@ -27,9 +27,10 @@ func (e *UsageLimitError) Error() string {
 }
 
 // MCPServerError reports that Claude Code marked a configured MCP server
-// (a Spec.MCPServers entry) failed or needs-auth at init. The halt fires before
-// the model acts, so a caller may start a fresh session (resume) and resend
-// that turn once.
+// (a Spec.MCPServers entry) failed or needs-auth at init. The halted turn's
+// request may already be out; a Session discards that turn and keeps the stored
+// transcript from the last completed turn, so a caller may resume and resend it
+// once. After a first-turn halt nothing is stored: start a fresh session.
 type MCPServerError struct {
 	Server string // the Spec.MCPServers name
 	Status string // "failed" or "needs-auth", as init reported it

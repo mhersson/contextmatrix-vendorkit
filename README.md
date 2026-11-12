@@ -61,8 +61,10 @@ Errors to branch on:
   bridge, not this type.
   2.1.322 re-reports each server's status at every `Session` turn's init, and
   after about 16 s of downtime a server stays failed for the rest of that
-  process, even once it is back. The halt fires at init, before the model acts,
-  so a caller may resume a fresh session and resend that turn once. A `Session`
+  process, even once it is back. The halted turn's request may already be out;
+  a `Session` discards that turn and keeps the stored transcript from the last
+  completed turn, so a caller may resume and resend it once. After a first-turn
+  halt there is nothing to resume: start a fresh session. A `Session`
   turn halted this way emits no `error` event (the returned error and the
   session's stop remain); a `Run` still does.
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is

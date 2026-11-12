@@ -824,3 +824,65 @@ func TestSessionServerHaltEmissions(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionServerHaltKeepsLastGoodTranscript(t *testing.T) {
+	storedFiles := func(home string) map[string][]byte {
+		out := map[string][]byte{}
+		matches, err := filepath.Glob(filepath.Join(sessionStore(home), "*", "*.jsonl"))
+		require.NoError(t, err)
+
+		for _, m := range matches {
+			data, err := os.ReadFile(m)
+			require.NoError(t, err)
+
+			out[m] = data
+		}
+
+		return out
+	}
+
+	for _, tc := range []struct {
+		name      string
+		completed bool
+	}{
+		{"after a completed turn", true},
+		{"first turn", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			halt := serverStatusFixture(t, "extra", "failed")
+			turns := []string{halt}
+
+			if tc.completed {
+				turns = []string{t7bTurns(t)[0], halt}
+			}
+
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: turns})
+			f.spec.Home, f.spec.Dir = t.TempDir(), t.TempDir()
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+			s := startFake(t, f, sessionOpts())
+
+			var before map[string][]byte
+
+			if tc.completed {
+				_, err := s.Send(boundCtx(t), t7bFirst, nil)
+				require.NoError(t, err)
+
+				before = storedFiles(f.spec.Home)
+				require.NotEmpty(t, before)
+			}
+
+			_, err := s.Send(boundCtx(t), "work", nil)
+
+			var se *MCPServerError
+			require.ErrorAs(t, err, &se)
+			require.NoError(t, s.Close())
+
+			after := storedFiles(f.spec.Home)
+			if tc.completed {
+				assert.Equal(t, before, after)
+			} else {
+				assert.Empty(t, after)
+			}
+		})
+	}
+}

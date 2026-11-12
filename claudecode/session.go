@@ -394,8 +394,13 @@ func (s *Session) end(ready bool, procErr error) {
 
 	var errs []error
 
-	if err := storeTranscripts(s.spec.Home, s.l.rd.config, s.spec.OAuthToken); err != nil {
-		errs = append(errs, maskErr(s.mask, err))
+	// A turn halted by a configured server may already have reached the
+	// transcript; the store keeps the last completed turn instead.
+	var halted *MCPServerError
+	if t == nil || !errors.As(t.err, &halted) {
+		if err := storeTranscripts(s.spec.Home, s.l.rd.config, s.spec.OAuthToken); err != nil {
+			errs = append(errs, maskErr(s.mask, err))
+		}
 	}
 
 	s.spec.Emitter.Emit(events.StateChange, map[string]any{"stop": reason, "turns": s.turns})
