@@ -62,7 +62,17 @@ type hookMatcher struct {
 }
 
 type settingsFile struct {
-	Hooks map[string][]hookMatcher `json:"hooks,omitempty"`
+	Hooks       map[string][]hookMatcher `json:"hooks,omitempty"`
+	Attribution attribution              `json:"attribution"`
+}
+
+// attribution turns off Claude Code's commit and PR attribution: empty texts drop
+// 2.1.322's Co-Authored-By trailer and PR footer, and SessionURL false drops the
+// Claude-Session line a remote-session env (reachable through Spec.Env) adds.
+type attribution struct {
+	Commit     string `json:"commit"`
+	PR         string `json:"pr"`
+	SessionURL bool   `json:"sessionUrl"`
 }
 
 // buildInvocation returns the claude argv and the per-run file contents keyed

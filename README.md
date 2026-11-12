@@ -119,6 +119,13 @@ Events are the harness kinds, in harness order. The ones that differ:
   with it set, the CLI refuses `run_in_background`. A foreground Bash call that
   outlives its `timeout` is then ended (exit 143, "Command timed out"), not
   moved to the background.
+- Claude Code's commit and PR attribution is off in every child: the
+  generated `--settings` file sets `attribution` to an empty `commit` and `pr`
+  and `sessionUrl: false`, so 2.1.322 sends no guidance to add a
+  `Co-Authored-By` trailer, PR footer or `Claude-Session` line (the last comes
+  from a remote-session env, which `Spec.Env` could carry). A resumed session
+  whose transcript holds the old guidance gets a reminder overriding it. No
+  `Spec` field reaches the settings file.
 - The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
   tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
   with a 2 KB `<persisted-output>` preview and a file path
@@ -160,7 +167,8 @@ Moving `Version`:
 1. Record new fixtures and re-run the probes in
    `claudecode/testdata/probe/scripts/` (procedure in
    `claudecode/testdata/README.md`); update the decisions table.
-2. Run the smoke tests, which drive the real CLI through `Run` against a mock
+2. Run the smoke tests, which drive the real CLI through `Run` (and
+   `Session`, for the attribution check) against a mock
    API with dummy credentials. They skip unless `VENDORKIT_SMOKE_CLAUDE` (the
    binary) and `VENDORKIT_SMOKE_MOCK` (the mock's base URL) are set;
    `smoke.sh` sets both and must run inside `jail.sh`, a network namespace

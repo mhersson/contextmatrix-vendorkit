@@ -5,7 +5,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 : "${SCRATCH:?set SCRATCH to an empty scratch directory}"
 "$HERE/noenv.sh"
-for s in bash-and-permissions background flags gate max-budget max-turns parallel-tools p6 snapshot account; do
+for s in bash-and-permissions background flags gate max-budget max-turns parallel-tools p6 snapshot account attribution; do
   "$HERE/jail.sh" "$HERE/$s.sh"
 done
 for set in short sixty; do

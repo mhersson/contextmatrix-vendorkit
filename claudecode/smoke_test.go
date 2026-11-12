@@ -16,12 +16,13 @@ import (
 	"time"
 
 	"github.com/mhersson/contextmatrix-harness/events"
+	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// The smoke tests run the real claude binary through Run against the mock
+// The smoke tests run the real claude binary through Run and Session against the mock
 // Messages API in testdata/probe/scripts/mock.py (scenario smoke), with dummy
 // credentials only; testdata/probe/scripts/smoke.sh runs them in the jail.
 
@@ -161,6 +162,70 @@ func TestSmokeBridgedResultWhole(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(res.Output), &got), res.Output)
 	assert.Equal(t, 60_000+len(marker), got.Len)
 	assert.True(t, strings.HasSuffix(got.Tail, marker), got.Tail)
+}
+
+// TestSmokeNoAttribution proves Run and Session start claude with its commit
+// and PR attribution off, also when Spec.Env names a remote session (which adds
+// a Claude-Session line): the mock answers with the attribution texts it found
+// in the request that carried the task.
+func TestSmokeNoAttribution(t *testing.T) {
+	binary, mockURL := smokeTarget(t)
+
+	const task = "Commit the change. REPORT-TASK-7f3a"
+
+	remote := []string{"CLAUDE_CODE_ENTRYPOINT=remote", "CLAUDE_CODE_REMOTE_SESSION_ID=session_01SmokeProbe"}
+
+	for _, tc := range []struct {
+		name    string
+		session bool
+		env     []string
+	}{
+		{"run", false, nil},
+		{"session", true, nil},
+		{"run remote session env", false, remote},
+		{"session remote session env", true, remote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, opts, _ := smokeRun(t, binary, mockURL)
+			spec.Env = append(spec.Env, tc.env...)
+			// 2.1.322 sends its Co-Authored-By and PR footer guidance only when Bash is available.
+			spec.BuiltinTools = []string{"Bash"}
+			spec.Tools = tools.NewRegistry(stubTool{name: "report", exec: func(map[string]any) (tools.Result, error) {
+				return tools.Result{}, errors.New("the mock answers report requests without calling it")
+			}})
+
+			var res harness.Result
+
+			if tc.session {
+				s, err := startSession(t.Context(), spec, opts)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = s.Close() })
+
+				res, err = s.Send(t.Context(), task, nil)
+				require.NoError(t, err)
+			} else {
+				spec.Task = task
+
+				var err error
+
+				res, err = run(t.Context(), spec, opts)
+				require.NoError(t, err)
+			}
+
+			var got struct {
+				Attribution map[string][]string `json:"attribution"`
+				Task        bool                `json:"task"`
+			}
+
+			require.NoError(t, json.Unmarshal([]byte(res.Output), &got), res.Output)
+			require.True(t, got.Task, "the mock did not see the task in the request it reported on")
+			require.Len(t, got.Attribution, 3, "system, tools and messages")
+
+			for part, found := range got.Attribution {
+				assert.Empty(t, found, part)
+			}
+		})
+	}
 }
 
 // TestSmokeCancelKillsBashChild cancels a run while the Bash built-in waits on

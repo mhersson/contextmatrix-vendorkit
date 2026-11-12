@@ -157,6 +157,18 @@ for run in "abc":
     print(f"{run}: markers={[q.get('system_markers') for q in reqs]}")
 print("(a: first launch file APPEND; b: resumed with REPLACE file; c: same plus --system-prompt-snapshot off)")
 
+section("commit and PR attribution")
+ATTRIBUTION = ("Co-Authored-By", "Generated with [Claude Code]", "Claude-Session")
+for name in ["none", "texts", "attribution", "coauthored", "replace-none", "replace-attribution", "announce-off-none",
+             "announce-off", "remote-texts", "remote", "no-bash", "read-only", "resume-a", "resume-b"]:
+    reqs = [q for q in jl(f"{S}/mock/attribution/mock-{name}/requests.jsonl") if (q.get("params") or {}).get("stream")]
+    last = [m for m in (reqs[0].get("messages") or []) if m.get("role") == "user"][-1:] if reqs else []
+    text = json.dumps(last[0].get("content"), ensure_ascii=False) if last else ""
+    print(f"{name}: per part={reqs[0].get('attribution') if reqs else None} "
+          f"newest user message={[a for a in ATTRIBUTION if a in text]}")
+print("(texts: empty commit and pr; attribution: also sessionUrl false; remote-*: a remote session env; "
+      "resume-b resumes resume-a, recorded without the setting, with it)")
+
 section("account check")
 for name in ["oauth", "oauth-key", "oauth-bedrock", "oauth-mantle", "oauth-simple", "oauth-socket", "both"]:
     cr = [d for d in jl(f"{S}/mock/account/{name}/stdout.jsonl") if d.get("type") == "control_response"]

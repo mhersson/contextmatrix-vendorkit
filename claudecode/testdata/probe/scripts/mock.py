@@ -17,10 +17,13 @@ Usage: mock.py PORT LOG SCENARIO [TOOL_INPUT_JSON [HOLD_FILE]]
                  (the stop hook should end the run before it). With Bash: one Bash tool_use whose
                  command writes its PID to bash.pid in the cwd and execs a long sleep. With mcp__cm__big:
                  one big {} call; after its tool_result, answer the JSON {"len", "tail"} (the result
-                 text's length and last 32 chars) and end the turn.
+                 text's length and last 32 chars) and end the turn. With mcp__cm__report: answer the JSON
+                 {"attribution", "task"} (the attribution texts found per request part, and whether the
+                 messages carry TASK_MARKER) and end the turn.
   HOLD_FILE:     the first streamed answer waits until this file exists.
 Every request is appended to LOG as one JSON line (auth headers, parameters, messages, system
-prompt length, hash and markers); the full system text goes to LOG.system.<n>.txt.
+prompt length, hash and markers, the attribution texts found per request part); the full system
+text goes to LOG.system.<n>.txt and the tool definitions to LOG.tools.<n>.json.
 """
 
 import hashlib
@@ -42,9 +45,13 @@ PAUSE = 0.4
 FINISH = "mcp__cm__finish"
 BIG = "mcp__cm__big"
 SLEEP = "mcp__cm__sleep"
+REPORT = "mcp__cm__report"
+TASK_MARKER = "REPORT-TASK-7f3a"
 FINISH_INPUTS = [{}, {"commit_message": "feat: smoke", "summary": "done"}]
 SLEEPER = {"command": "sh -c 'echo $$ > bash.pid; exec sleep 300'", "description": "Sleep"}
 MARKERS = ["MARKER-REPLACE-7f3a", "MARKER-APPEND-7f3a"]
+# Claude Code's commit and PR attribution texts, searched in each request part.
+ATTRIBUTION = ["Co-Authored-By", "Generated with [Claude Code]", "Claude-Session"]
 # Unique per mock start: a resumed transcript must not meet message or tool IDs it already holds.
 RUN = format(int(time.time() * 1000) % 0xFFFFFF, "06x")
 lock = threading.Lock()
@@ -62,6 +69,13 @@ def system_text(system):
     if isinstance(system, list):
         return "\n".join(b.get("text", "") for b in system if isinstance(b, dict))
     return ""
+
+
+def attribution(body, sys_txt):
+    """The ATTRIBUTION texts found in the request's system prompt, tools and messages."""
+    parts = {"system": sys_txt, "tools": json.dumps(body.get("tools", []), ensure_ascii=False),
+             "messages": json.dumps(body.get("messages", []), ensure_ascii=False)}
+    return {k: [a for a in ATTRIBUTION if a in v] for k, v in parts.items()}
 
 
 def tool_results(msgs):
@@ -94,6 +108,8 @@ def tool_answer(body, n):
     if SCENARIO == "smoke":
         names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
         done = tool_results(msgs)
+        if REPORT in names:
+            return None
         if BIG in names and done == 0:
             return BIG, {}
         if FINISH in names and done < len(FINISH_INPUTS):
@@ -138,10 +154,14 @@ class H(BaseHTTPRequestHandler):
             rec["system_len"] = len(sys_txt)
             rec["system_sha256"] = hashlib.sha256(sys_txt.encode()).hexdigest()[:16]
             rec["system_markers"] = [m for m in MARKERS if m in sys_txt]
+            rec["attribution"] = attribution(body, sys_txt)
             rec["messages"] = body.get("messages")
             if sys_txt:
                 with open(f"{LOG}.system.{n}.txt", "w") as f:
                     f.write(sys_txt)
+            if body.get("tools"):
+                with open(f"{LOG}.tools.{n}.json", "w") as f:
+                    json.dump(body["tools"], f, indent=1)
         with lock:
             with open(LOG, "a") as f:
                 f.write(json.dumps(rec) + "\n")
@@ -212,7 +232,11 @@ class H(BaseHTTPRequestHandler):
                 "type": "input_json_delta", "partial_json": json.dumps(answer[1])}}))
             stop = "tool_use"
         else:
-            if SCENARIO == "smoke" and BIG in [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]:
+            names = [t.get("name") for t in body.get("tools", []) if isinstance(t, dict)]
+            if SCENARIO == "smoke" and REPORT in names:
+                text = json.dumps({"attribution": attribution(body, system_text(body.get("system"))),
+                                   "task": TASK_MARKER in json.dumps(body.get("messages", []))})
+            elif SCENARIO == "smoke" and BIG in names:
                 got = last_result_text(body.get("messages", []))
                 text = json.dumps({"len": len(got), "tail": got[-32:]})
             else:

@@ -1,6 +1,6 @@
 #!/bin/bash
-# smoke.sh (inside jail.sh): claudecode's TestSmoke* tests, the real claude through Run
-# against mock.py's smoke scenario. SMOKE_TEST is a test binary from
+# smoke.sh (inside jail.sh): claudecode's TestSmoke* tests, the real claude through Run and
+# Session against mock.py's smoke scenario. SMOKE_TEST is a test binary from
 # `go test -c -o <path> ./claudecode`. Writes $SCRATCH/smoke.
 source "$(dirname "$0")/lib.sh"
 : "${SMOKE_TEST:?set SMOKE_TEST to a binary built with go test -c ./claudecode}"
