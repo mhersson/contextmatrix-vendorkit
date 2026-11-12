@@ -428,6 +428,14 @@ func TestChildEnvProxyBypassesLoopback(t *testing.T) {
 			upper: "a," + loopback, lower: "b, localhost,127.0.0.1,::1", wantNoProxySet: true,
 		},
 		{
+			name: "empty no_proxy starts from NO_PROXY", env: []string{"HTTPS_PROXY=http://p:1", "NO_PROXY=corp", "no_proxy="},
+			upper: "corp," + loopback, lower: "corp," + loopback, wantNoProxySet: true,
+		},
+		{
+			name: "empty NO_PROXY starts from no_proxy", env: []string{"HTTPS_PROXY=http://p:1", "NO_PROXY=", "no_proxy=corp"},
+			upper: "corp," + loopback, lower: "corp," + loopback, wantNoProxySet: true,
+		},
+		{
 			name: "loopback already listed", env: []string{"HTTP_PROXY=http://p:1", "NO_PROXY=::1,LOCALHOST,127.0.0.1"},
 			upper: "::1,LOCALHOST,127.0.0.1", lower: "::1,LOCALHOST,127.0.0.1", wantNoProxySet: true,
 		},

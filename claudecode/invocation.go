@@ -172,8 +172,8 @@ func buildInvocation(s Spec, bi bridgeInfo, runDir string, session bool) (args [
 	return args, files, nil
 }
 
-// proxyEnv name a proxy for the child. Node sends loopback through it too, so
-// the bridge and the stop hook need the loopbackHosts in NO_PROXY.
+// proxyEnv are the variables that name a proxy. 2.1.322 sends loopback through
+// it too, so the bridge and the stop hook need loopbackHosts in NO_PROXY.
 var (
 	proxyEnv      = []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"}
 	loopbackHosts = []string{"127.0.0.1", "localhost", "::1"}
@@ -194,7 +194,8 @@ func childEnv(s Spec, configDir string) []string {
 
 // noProxyEnv returns NO_PROXY and no_proxy with loopbackHosts added when env
 // names a proxy, nil otherwise. Each form keeps its own entries, or the other
-// form's when unset, so a reader preferring either form still skips them.
+// form's when unset or empty, so a reader preferring either form still skips
+// them.
 func noProxyEnv(env []string) map[string]string {
 	vals := map[string]string{}
 	proxied := false
@@ -222,8 +223,8 @@ func noProxyEnv(env []string) map[string]string {
 			other = "NO_PROXY"
 		}
 
-		v, ok := vals[k]
-		if !ok {
+		v := vals[k]
+		if v == "" {
 			v = vals[other]
 		}
 

@@ -146,6 +146,13 @@ How they ran (`probe/scripts/`):
 - A read-only `Bash` call runs as soon as its `tool_use` block ends, while
   the message's later blocks still stream, so its `tool_result` line lands
   inside the message (`synthetic/parallel.jsonl`).
+- A proxy variable (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) carries
+  loopback requests too: with a dead proxy (`http://127.0.0.1:9`) and no
+  `NO_PROXY`, the smoke run's `init` reported the bridge `failed` ("MCP bridge
+  server cm failed to start"); with `127.0.0.1,localhost,::1` in `NO_PROXY` and
+  `no_proxy` the same run completed. The binary reads
+  `no_proxy||NO_PROXY`, so an empty form defers to the other. The smoke test's
+  `dead proxy` case re-checks it.
 - `--max-budget-usd` (`help.txt:131`) and `--replay-user-messages`
   (`help.txt:191`) are listed.
 - `init` reports a `messaging_socket_path` under `/tmp/cc-socks/`: the CLI
