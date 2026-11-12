@@ -76,6 +76,10 @@ The scratch directory the probes ran in is replaced by `/scratch` (and its
   hash and markers).
 - `snapshot/`: the requests of the system-prompt resume probe (runs a, b, c
   of `scripts/snapshot.sh`).
+- `attribution/`: the requests of the commit and PR attribution probe, one
+  file per case of `scripts/attribution.sh`; each line's `attribution` names
+  the attribution texts found in the request's system prompt, tools and
+  messages.
 
 How they ran (`probe/scripts/`):
 
@@ -85,12 +89,12 @@ How they ran (`probe/scripts/`):
   PATH=<claude dir>:/usr/bin:/bin HOME=$SCRATCH/home`, cwd an empty scratch
   directory.
 - Mock-API runs: `bash-and-permissions.sh`, `background.sh`, `flags.sh`, `gate.sh`,
-  `max-budget.sh`, `max-turns.sh`, `parallel-tools.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
+  `max-budget.sh`, `max-turns.sh`, `parallel-tools.sh`, `p6.sh`, `snapshot.sh`, `account.sh`, `attribution.sh` and `idle-timeout.sh`,
   each inside `jail.sh` (a network namespace with only loopback up, so no
   request can leave the host), against `mock.py`. The child env is `env -i`
   plus `PATH`, `HOME`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CONFIG_DIR`,
   `ANTHROPIC_BASE_URL` and either `ANTHROPIC_API_KEY=dummy-key` or a dummy
-  OAuth token (P6, the snapshot probe and `idle-timeout.sh`). Two scripts
+  OAuth token (P6, the snapshot probe, `attribution.sh` and `idle-timeout.sh`). Three scripts
   differ:
   - `account.sh` always sets the dummy OAuth token and adds, in every case
     but the token-only baseline, the dummy API key or one variable probed for
@@ -101,6 +105,8 @@ How they ran (`probe/scripts/`):
   - `idle-timeout.sh` adds `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` in some cases and
     passes `--mcp-config` naming `sleepmcp.py` (server `cm`, one tool that
     answers only after sleeping) with `--allowedTools mcp__cm__sleep`.
+  - `attribution.sh` adds `CLAUDE_CODE_ATTRIBUTION_ANNOUNCEMENT=1` in its
+    `announce-env` case.
 
   Flags: `-p --input-format stream-json --output-format stream-json
   --verbose --include-partial-messages --setting-sources user

@@ -47,6 +47,9 @@ for r in "ABC":
     copy(f"{SCR}/p6/mock{r}/requests.jsonl", f"{TD}/probe/p6/mock-requests-{r.lower()}.jsonl")
 for r in "abc":
     copy(f"{SCR}/mock/snapshot/mock-{r}/requests.jsonl", f"{TD}/probe/snapshot/mock-requests-{r}.jsonl")
+for r in ["none", "attribution", "coauthored", "replace-none", "replace-attribution", "announce-env", "resume-a",
+          "resume-b"]:
+    copy(f"{SCR}/mock/attribution/mock-{r}/requests.jsonl", f"{TD}/probe/attribution/mock-requests-{r}.jsonl")
 copy(f"{SCR}/mock/maxturns/run/stdout.jsonl", f"{TD}/synthetic/max_turns.jsonl")
 copy(f"{SCR}/mock/maxbudget/end-turn/run/stdout.jsonl", f"{TD}/synthetic/max_budget_end_turn.jsonl")
 copy(f"{SCR}/mock/maxbudget/tool-use/run/stdout.jsonl", f"{TD}/synthetic/max_budget_tool_use.jsonl")
