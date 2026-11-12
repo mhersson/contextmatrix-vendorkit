@@ -121,7 +121,7 @@ Events are the harness kinds, in harness order. The ones that differ:
   moved to the background.
 - Claude Code's commit and PR attribution is off in every child: the
   generated `--settings` file sets `attribution` to an empty `commit` and `pr`
-  and `sessionUrl: false`, so 2.1.322 tells the model to add no
+  and `sessionUrl: false`, so 2.1.322 sends no guidance to add a
   `Co-Authored-By` trailer, PR footer or `Claude-Session` line (the last comes
   from a remote-session env, which `Spec.Env` could carry). A resumed session
   whose transcript holds the old guidance gets a reminder overriding it. No

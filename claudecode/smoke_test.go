@@ -188,7 +188,7 @@ func TestSmokeNoAttribution(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, opts, _ := smokeRun(t, binary, mockURL)
 			spec.Env = append(spec.Env, tc.env...)
-			// 2.1.322 sends its attribution guidance only when Bash is available.
+			// 2.1.322 sends its Co-Authored-By and PR footer guidance only when Bash is available.
 			spec.BuiltinTools = []string{"Bash"}
 			spec.Tools = tools.NewRegistry(stubTool{name: "report", exec: func(map[string]any) (tools.Result, error) {
 				return tools.Result{}, errors.New("the mock answers report requests without calling it")
