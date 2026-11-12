@@ -61,7 +61,9 @@ Errors to branch on:
   2.1.322 re-reports each server's status at every `Session` turn's init, and
   after about 16 s of downtime a server stays failed for the rest of that
   process, even once it is back. The halt fires at init, before the model acts,
-  so a caller may resume a fresh session and resend that turn once.
+  so a caller may resume a fresh session and resend that turn once. A `Session`
+turn halted this way emits no `error` event (the returned error and the
+session's stop remain); a `Run` still does.
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.

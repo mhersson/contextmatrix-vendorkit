@@ -15,6 +15,7 @@ import (
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
+	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -782,6 +783,51 @@ func TestSessionFailsClosedOnUnreadableAccount(t *testing.T) {
 			require.ErrorIs(t, err, errNotSubscription, "an unreadable account fails as an account error, not a gate timeout")
 			assert.Less(t, time.Since(start), 5*time.Second)
 			assert.Nil(t, s)
+		})
+	}
+}
+
+func TestSessionServerHaltEmissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, server string
+		typed        bool
+	}{
+		{"configured server", "extra", true},
+		{"bridge", serverName, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeSession(t, fakeclaude.Scenario{Turns: []string{serverStatusFixture(t, tc.server, "failed")}})
+			f.spec.MCPServers = []mcpbridge.ServerConfig{{Name: "extra", URL: "http://127.0.0.1:1/mcp"}}
+
+			var deltas []llm.Delta
+
+			f.spec.OnDelta = func(d llm.Delta) { deltas = append(deltas, d) }
+			s := startFake(t, f, sessionOpts())
+
+			_, err := s.Send(boundCtx(t), "work", nil)
+			require.Error(t, err)
+
+			var se *MCPServerError
+			assert.Equal(t, tc.typed, errors.As(err, &se))
+
+			evs := f.log.events(t)
+
+			var kinds []events.Kind
+
+			for _, ev := range evs {
+				kinds = append(kinds, ev.Kind)
+			}
+
+			t.Logf("emitted kinds: %v; deltas: %d", kinds, len(deltas)) // observed order
+			assert.Empty(t, deltas, "no API call started")
+			require.Len(t, ofKind(evs, events.UserInput), 1)
+			require.Len(t, stops(evs), 1)
+
+			if tc.typed {
+				assert.Empty(t, ofKind(evs, events.ErrorKind))
+			} else {
+				assert.Len(t, ofKind(evs, events.ErrorKind), 1)
+			}
 		})
 	}
 }

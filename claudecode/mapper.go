@@ -846,7 +846,7 @@ func (m *mapper) conclude(reason string, err error) {
 		}
 
 		m.emit(events.Kind("usage_limit"), data)
-	} else if reason == "error" && m.err != nil {
+	} else if reason == "error" && m.err != nil && !m.resendable() {
 		m.emit(events.ErrorKind, map[string]any{"error": m.err.Error()})
 	}
 
@@ -856,6 +856,14 @@ func (m *mapper) conclude(reason string, err error) {
 	case m.sawResult && m.limit == nil:
 		m.emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": m.res.Turns})
 	}
+}
+
+// resendable reports a Session turn halted by a configured server; the caller
+// resumes and resends it, so the attempt leaves no error event.
+func (m *mapper) resendable() bool {
+	var se *MCPServerError
+
+	return m.o.Session && errors.As(m.err, &se)
 }
 
 // annotate names both versions on an error from an untested release. Typed
