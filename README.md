@@ -109,6 +109,11 @@ Events are the harness kinds, in harness order. The ones that differ:
   `CLAUDE_CODE_USE_*` provider switches, host-managed provider settings and
   `CLAUDE_CODE_SIMPLE` (the env form of `--bare`). The OAuth token is masked in
   every event, Result field, error, stderr tail and stored transcript.
+- When the child env names a proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`
+  or a lowercase form), `NO_PROXY` and `no_proxy` gain `127.0.0.1`,
+  `localhost` and `::1`: 2.1.322 sends loopback traffic through the proxy too,
+  so a dead proxy fails the bridge. Existing entries stay, and an unset form
+  starts from the other's.
 
 ## Tested version
 

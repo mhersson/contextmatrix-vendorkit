@@ -367,6 +367,104 @@ func TestChildEnv(t *testing.T) {
 	assert.NotContains(t, env, "CLAUDE_CONFIG_DIR=/y")
 }
 
+// envValue returns the value of name in env, and whether env holds it.
+func envValue(t *testing.T, env []string, name string) (string, bool) {
+	t.Helper()
+
+	var value string
+
+	found := false
+
+	for _, kv := range env {
+		if k, v, _ := strings.Cut(kv, "="); k == name {
+			require.False(t, found, "%s appears twice", name)
+
+			value, found = v, true
+		}
+	}
+
+	return value, found
+}
+
+func TestChildEnvProxyBypassesLoopback(t *testing.T) {
+	const loopback = "127.0.0.1,localhost,::1"
+
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		t.Run(name, func(t *testing.T) {
+			s := testSpec()
+			s.Env = []string{"PATH=/bin", name + "=http://proxy:3128"}
+
+			env := childEnv(s, "/run/config")
+
+			for _, np := range []string{"NO_PROXY", "no_proxy"} {
+				v, ok := envValue(t, env, np)
+				require.True(t, ok, np)
+				assert.Equal(t, loopback, v, np)
+			}
+
+			assert.Contains(t, env, name+"=http://proxy:3128")
+		})
+	}
+
+	for _, tc := range []struct {
+		name           string
+		env            []string
+		upper, lower   string
+		wantNoProxySet bool
+	}{
+		{name: "no proxy", env: []string{"PATH=/bin"}},
+		{name: "empty proxy", env: []string{"PATH=/bin", "HTTP_PROXY="}},
+		{name: "no proxy keeps NO_PROXY as is", env: []string{"NO_PROXY=corp"}, upper: "corp", wantNoProxySet: true},
+		{
+			name: "NO_PROXY kept and seeds no_proxy", env: []string{"HTTPS_PROXY=http://p:1", "NO_PROXY=corp.internal"},
+			upper: "corp.internal," + loopback, lower: "corp.internal," + loopback, wantNoProxySet: true,
+		},
+		{
+			name: "no_proxy kept and seeds NO_PROXY", env: []string{"https_proxy=http://p:1", "no_proxy=.corp"},
+			upper: ".corp," + loopback, lower: ".corp," + loopback, wantNoProxySet: true,
+		},
+		{
+			name: "each form keeps its own entries", env: []string{"ALL_PROXY=socks5://p:1", "NO_PROXY=a", "no_proxy=b, localhost"},
+			upper: "a," + loopback, lower: "b, localhost,127.0.0.1,::1", wantNoProxySet: true,
+		},
+		{
+			name: "loopback already listed", env: []string{"HTTP_PROXY=http://p:1", "NO_PROXY=::1,LOCALHOST,127.0.0.1"},
+			upper: "::1,LOCALHOST,127.0.0.1", lower: "::1,LOCALHOST,127.0.0.1", wantNoProxySet: true,
+		},
+		{
+			name: "trailing comma", env: []string{"HTTP_PROXY=http://p:1", "NO_PROXY=corp,"},
+			upper: "corp," + loopback, lower: "corp," + loopback, wantNoProxySet: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testSpec()
+			s.Env = tc.env
+
+			env := childEnv(s, "/run/config")
+
+			upper, upperOK := envValue(t, env, "NO_PROXY")
+			lower, lowerOK := envValue(t, env, "no_proxy")
+
+			if !tc.wantNoProxySet {
+				assert.False(t, upperOK, "NO_PROXY=%s", upper)
+				assert.False(t, lowerOK, "no_proxy=%s", lower)
+
+				return
+			}
+
+			assert.Equal(t, tc.upper, upper, "NO_PROXY")
+
+			if tc.lower == "" {
+				assert.False(t, lowerOK, "no_proxy=%s", lower)
+
+				return
+			}
+
+			assert.Equal(t, tc.lower, lower, "no_proxy")
+		})
+	}
+}
+
 func TestUserMessage(t *testing.T) {
 	got, err := userMessage("hi", nil)
 	require.NoError(t, err)

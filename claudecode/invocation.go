@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -170,14 +172,86 @@ func buildInvocation(s Spec, bi bridgeInfo, runDir string, session bool) (args [
 	return args, files, nil
 }
 
+// proxyEnv name a proxy for the child. Node sends loopback through it too, so
+// the bridge and the stop hook need the loopbackHosts in NO_PROXY.
+var (
+	proxyEnv      = []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"}
+	loopbackHosts = []string{"127.0.0.1", "localhost", "::1"}
+)
+
 // childEnv builds the claude process env from Spec.Env.
 func childEnv(s Spec, configDir string) []string {
-	return subproc.BuildEnv(s.Env, droppedEnv, map[string]string{
+	set := map[string]string{
 		"HOME":                    s.Home,
 		"CLAUDE_CONFIG_DIR":       configDir,
 		"CLAUDE_CODE_OAUTH_TOKEN": s.OAuthToken,
 		"DISABLE_AUTOUPDATER":     "1",
-	})
+	}
+	maps.Copy(set, noProxyEnv(s.Env))
+
+	return subproc.BuildEnv(s.Env, droppedEnv, set)
+}
+
+// noProxyEnv returns NO_PROXY and no_proxy with loopbackHosts added when env
+// names a proxy, nil otherwise. Each form keeps its own entries, or the other
+// form's when unset, so a reader preferring either form still skips them.
+func noProxyEnv(env []string) map[string]string {
+	vals := map[string]string{}
+	proxied := false
+
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+
+		switch {
+		case slices.Contains(proxyEnv, k):
+			proxied = proxied || v != ""
+		case k == "NO_PROXY" || k == "no_proxy":
+			vals[k] = v
+		}
+	}
+
+	if !proxied {
+		return nil
+	}
+
+	out := map[string]string{}
+
+	for _, k := range []string{"NO_PROXY", "no_proxy"} {
+		other := "no_proxy"
+		if k == other {
+			other = "NO_PROXY"
+		}
+
+		v, ok := vals[k]
+		if !ok {
+			v = vals[other]
+		}
+
+		out[k] = withLoopback(v)
+	}
+
+	return out
+}
+
+// withLoopback appends each loopback host the comma-separated list lacks.
+func withLoopback(list string) string {
+	have := map[string]bool{}
+	for e := range strings.SplitSeq(list, ",") {
+		have[strings.ToLower(strings.TrimSpace(e))] = true
+	}
+
+	entries := []string{}
+	if list = strings.TrimRight(list, ", "); list != "" {
+		entries = append(entries, list)
+	}
+
+	for _, h := range loopbackHosts {
+		if !have[h] {
+			entries = append(entries, h)
+		}
+	}
+
+	return strings.Join(entries, ",")
 }
 
 type inputBlock struct {
