@@ -30,8 +30,7 @@ type Spec struct {
 	TaskImages []llm.ImageURL // data URLs, sent as image blocks with Task
 
 	// At most one of the two system-prompt fields is set. SystemPrompt
-	// replaces Claude Code's system prompt (architect); SystemPromptAppend
-	// appends to it (agent: phase prompt plus repo AGENTS.md / CLAUDE.md).
+	// replaces Claude Code's system prompt; SystemPromptAppend appends to it.
 	// Both go through a file, never argv.
 	SystemPrompt       string
 	SystemPromptAppend string
@@ -47,7 +46,7 @@ type Spec struct {
 	SessionID string // new persisted session with this UUID
 	Resume    string // continue this session ID (same Home and Dir); at most one of SessionID/Resume; neither = no persistence for Run, a persisted session with a fresh ID for Session
 
-	Emitter *events.Emitter     // required; events per section 2
+	Emitter *events.Emitter     // required; events follow the README "Event contract"
 	Redact  func(string) string // applied to content, args, thinking and errors before Emit; nil = identity
 	// OnDelta receives every streamed fragment synchronously, in order: text
 	// (Content), thinking (Reasoning) and tool input (ToolCall: Index, ID,

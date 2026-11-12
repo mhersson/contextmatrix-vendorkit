@@ -23,7 +23,9 @@ if found, tested, err := claudecode.CheckVersion(ctx, binary); err == nil && !te
 ```
 
 Check the version once at start. A mismatch is never an error and a run on an
-untested release proceeds; if it fails, the error names the version that ran.
+untested release proceeds; if it fails after init reported a version other
+than `Version`, the error names both. A failure before init, such
+as a flag the CLI rejects, carries no version.
 
 **Run** (agent phases, architect stages): split the harness registry, set the
 `Spec` and call `Run`.
@@ -158,6 +160,10 @@ Moving `Version`:
    ```
 
 3. The operator does a live auth check.
+4. Each backend pins the release in its image and tests the pin; each test
+   fails until that backend's image pin equals `Version`: agent
+   `internal/modelexec/pin_test.go`, chat `internal/chatwork/claudecode_test.go`,
+   architect `internal/cli/claudepin_test.go`.
 
 ## Development
 

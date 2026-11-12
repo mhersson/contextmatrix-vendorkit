@@ -67,8 +67,9 @@ type turn struct {
 // --output-format stream-json` process and returns once it is ready to accept
 // the first message: claude has answered the initialize request, since a
 // message written before that can be dropped. ctx bounds only the start; the
-// start fails when ctx ends or no answer comes within 30 s. Task, TaskImages
-// and MaxBudgetUSD are unused; MaxTurns applies per turn. The session is
+// start fails when ctx ends or no answer comes within 30 s. A non-empty Task
+// fails validation (send it with Send); TaskImages and MaxBudgetUSD are
+// ignored (Send takes the images). MaxTurns applies per turn. The session is
 // always persisted under Home: SessionID and Resume work as in Run, and with
 // neither it gets a fresh ID.
 func StartSession(ctx context.Context, spec Spec) (*Session, error) {
