@@ -825,7 +825,8 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 // conclude records the outcome and emits the closing events: error (for
 // Reason "error"), then a Run's single stop or a Session turn's awaiting_human.
 // A Session's stop comes from the Session when its process ends; a usage limit
-// ends it, so that turn does not await the human.
+// ends it, so that turn does not await the human. A Session turn halted by a
+// configured server emits no error event.
 func (m *mapper) conclude(reason string, err error) {
 	m.res.Reason = reason
 	m.res.Messages = m.closedMessages()

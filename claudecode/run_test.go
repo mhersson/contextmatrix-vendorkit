@@ -486,6 +486,7 @@ func TestRunConfiguredServerFailed(t *testing.T) {
 			assert.Equal(t, "extra", se.Server)
 			assert.Equal(t, status, se.Status)
 			assert.Equal(t, "error", res.Reason)
+			assert.Len(t, ofKind(f.log.events(t), events.ErrorKind), 1, "a Run keeps its error event")
 			assert.True(t, processGone(f.recorded(t).PID))
 		})
 	}

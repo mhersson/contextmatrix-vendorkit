@@ -57,13 +57,14 @@ Errors to branch on:
 - `*MCPServerError` (`errors.As`): Claude Code reported a `Spec.MCPServers`
   server `failed` or `needs-auth` at init; it carries `Server` and `Status`. The
   run stops, or the session ends (`Result.Reason` `"error"`). A bridge server
-  reported the same way stops it with an error naming the bridge, not this type.
+  reported the same way ends the run or session with an error naming the
+  bridge, not this type.
   2.1.322 re-reports each server's status at every `Session` turn's init, and
   after about 16 s of downtime a server stays failed for the rest of that
   process, even once it is back. The halt fires at init, before the model acts,
   so a caller may resume a fresh session and resend that turn once. A `Session`
-turn halted this way emits no `error` event (the returned error and the
-session's stop remain); a `Run` still does.
+  turn halted this way emits no `error` event (the returned error and the
+  session's stop remain); a `Run` still does.
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.

@@ -812,13 +812,6 @@ func TestSessionServerHaltEmissions(t *testing.T) {
 
 			evs := f.log.events(t)
 
-			var kinds []events.Kind
-
-			for _, ev := range evs {
-				kinds = append(kinds, ev.Kind)
-			}
-
-			t.Logf("emitted kinds: %v; deltas: %d", kinds, len(deltas)) // observed order
 			assert.Empty(t, deltas, "no API call started")
 			require.Len(t, ofKind(evs, events.UserInput), 1)
 			require.Len(t, stops(evs), 1)
