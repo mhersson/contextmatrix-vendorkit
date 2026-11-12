@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -322,6 +323,32 @@ func TestBridgeClose(t *testing.T) {
 	var ne net.Error
 	if errors.As(err, &ne) {
 		assert.False(t, ne.Timeout(), "the bridge still holds the connection open after Close")
+	}
+}
+
+// Not parallel: it counts the process's goroutines. The bridge closes before
+// the client, so no DELETE ends the server sessions.
+func TestBridgeCloseEndsAbandonedSessions(t *testing.T) {
+	const cycles, margin = 20, 3
+
+	base := runtime.NumGoroutine()
+
+	for range cycles {
+		b, err := Start(t.Context(), "cm", testRegistry())
+		require.NoError(t, err)
+
+		sess := connect(t, b)
+		call(t, sess, "echo", map[string]any{"text": "hi"})
+
+		require.NoError(t, b.Close())
+
+		_ = sess.Close()
+	}
+
+	settled := assert.Eventually(t, func() bool { return runtime.NumGoroutine() <= base+margin },
+		5*time.Second, 20*time.Millisecond)
+	if !settled {
+		t.Logf("%d goroutines after %d cycles, baseline %d", runtime.NumGoroutine(), cycles, base)
 	}
 }
 
