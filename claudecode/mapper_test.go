@@ -1252,9 +1252,13 @@ func TestMapperUntestedVersionProceeds(t *testing.T) {
 	assert.Contains(t, err.Error(), "2.1.400")
 	assert.Contains(t, err.Error(), Version)
 
+	crash := readFixture(t, "synthetic/crash.jsonl")
+	_, _, want := replayData(t, rewrite(crash, `"claude_code_version":"2.1.322",`, ""), mapperOpts{Prefix: cmlocal}, nil)
+	require.Error(t, want)
+
 	_, _, err = replay(t, "synthetic/crash.jsonl", mapperOpts{Prefix: cmlocal})
 	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "tested", "a matching version adds nothing")
+	assert.Equal(t, want.Error(), err.Error(), "a matching version adds nothing")
 
 	t.Run("not on cancellation", func(t *testing.T) {
 		procErr := fmt.Errorf("%w: stop", context.Canceled)

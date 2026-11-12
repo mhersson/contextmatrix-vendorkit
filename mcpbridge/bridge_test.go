@@ -562,7 +562,7 @@ func TestToResultContent(t *testing.T) {
 	}{
 		{"text and image", tools.Result{Text: "see", Images: []llm.ImageURL{{URL: picURL}}}, []string{"text:see", "image:image/png"}},
 		{"image only", tools.Result{Images: []llm.ImageURL{{URL: picURL}}}, []string{"image:image/png"}},
-		{"malformed image only", tools.Result{Images: []llm.ImageURL{{URL: "not-a-data-url"}}}, []string{"text:[image omitted: unsupported or malformed image URL]"}},
+		{"malformed image only", tools.Result{Images: []llm.ImageURL{{URL: "not-a-data-url"}}}, []string{"text:" + omittedImageNote}},
 		{"empty", tools.Result{}, []string{"text:"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

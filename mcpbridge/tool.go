@@ -22,6 +22,9 @@ const closedResult = "unexecuted: the run is ending"
 // 400,000 is the largest size probed whole, above every backend's tool cap.
 const maxResultSizeChars = 400_000
 
+// omittedImageNote replaces an image result whose URL is not a usable data URL.
+const omittedImageNote = "[image omitted: unsupported or malformed image URL]"
+
 var emptyObjectSchema = json.RawMessage(`{"type":"object"}`)
 
 func (b *Bridge) register(runCtx context.Context, server *mcp.Server, t tools.Tool, schema json.RawMessage) {
@@ -118,7 +121,7 @@ func toResult(res tools.Result) *mcp.CallToolResult {
 	for _, img := range res.Images {
 		mime, data, ok := parseDataURL(img.URL)
 		if !ok {
-			out.Content = append(out.Content, &mcp.TextContent{Text: "[image omitted: unsupported or malformed image URL]"})
+			out.Content = append(out.Content, &mcp.TextContent{Text: omittedImageNote})
 
 			continue
 		}
