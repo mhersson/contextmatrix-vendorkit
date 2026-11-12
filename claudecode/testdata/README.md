@@ -49,6 +49,8 @@ dash-encoded `projects/` key to `-scratch-spike` (`cwd`, `original_cwd`,
 | `partial.jsonl` | `real/t5.jsonl`, in the shapes of `real/p4-partial-messages.jsonl` | `stream_event` lines added per call: `message_start` (all four buckets; the early `output_tokens` of the call's assistant line), text deltas in fragments, a `tool_use` block start with three `input_json_delta` fragments that concatenate to the finish input, `message_delta` with cumulative complete usage and `stop_reason` (call 1: input 2, output 120, cache read 0, cache creation 3844, `tool_use`; call 2: 2, 5, 3844, 133, `end_turn`), `message_stop`. The `t5` lines are unchanged; the `message_delta` usages sum to `result.usage`. Call 1's early `output_tokens` (2) differs from its final 120 |
 | `rejected.jsonl` | `real/t1.jsonl` | `rate_limit_event` status `rejected` (window `seven_day` rejected, utilization 1.0); no `result` line. A real rejection is unrecorded |
 | `max_turns.jsonl` | CLI output of a mock-API run, `--max-turns 1`, one `Bash` turn, gated by `initialize` | `result` with `subtype: "error_max_turns"`, `is_error: true`, `terminal_reason: "max_turns"`, `errors: ["Reached maximum number of turns (1)"]` and no `result` field; the process exited 1. Starts with the gate's `control_response`; usage values are the mock's |
+| `max_budget_end_turn.jsonl` | CLI output of a mock-API run, `--max-budget-usd 0.000001`, one text-only call (scenario `text`), gated by `initialize` | `result` with `subtype: "error_max_budget_usd"`, `is_error: true`, `terminal_reason: "budget_exhausted"`, `stop_reason: "end_turn"`, `errors: ["Reached maximum budget ($0.000001)"]` and `result: null`; one call, whose answer is the `ok` the mapper returns as Output. Starts with the gate's `control_response`; usage values are the mock's |
+| `max_budget_tool_use.jsonl` | the same run with the `bash` scenario (`{"command":"echo one"}`) | the same `result` shape with `stop_reason: "tool_use"`; the call's tool never runs |
 | `two_models.jsonl` | `real/t5.jsonl` | `result.modelUsage` and `model_usage_since_last_result` gain a `claude-haiku-5-5` entry (350/12/0/0, `costUSD` 0.000041) that no assistant message served; `total_cost_usd` 0.0175914; `result.usage` unchanged |
 | `unknown.jsonl` | `real/t1.jsonl` | an unknown top-level type (`x_future_event`), an unknown `system` subtype (`x_future_subtype`), `x_future_field` on every known line, and unknown keys inside the assistant `message` and `result.usage` |
 | `crash.jsonl` | `real/t5.jsonl` | the `result` line removed |
@@ -83,7 +85,7 @@ How they ran (`probe/scripts/`):
   PATH=<claude dir>:/usr/bin:/bin HOME=$SCRATCH/home`, cwd an empty scratch
   directory.
 - Mock-API runs: `bash-and-permissions.sh`, `background.sh`, `flags.sh`, `gate.sh`,
-  `max-turns.sh`, `parallel-tools.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
+  `max-budget.sh`, `max-turns.sh`, `parallel-tools.sh`, `p6.sh`, `snapshot.sh`, `account.sh` and `idle-timeout.sh`,
   each inside `jail.sh` (a network namespace with only loopback up, so no
   request can leave the host), against `mock.py`. The child env is `env -i`
   plus `PATH`, `HOME`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CONFIG_DIR`,
@@ -140,6 +142,9 @@ How they ran (`probe/scripts/`):
 - `--max-turns` is accepted but hidden (`help.txt` does not list it), and an
   `error_max_turns` run exits 1 after its `result` line
   (`synthetic/max_turns.jsonl`).
+- `--max-budget-usd` is checked after each call, so the call that crosses the
+  budget is the last, and a `tool_use` it asked for never runs
+  (`synthetic/max_budget_end_turn.jsonl`, `synthetic/max_budget_tool_use.jsonl`).
 - `rate_limit_event` against the mock, which sends no rate-limit headers,
   lacks `resetsAt` and the window fields (`rateLimitType`,
   `unifiedWindows`):

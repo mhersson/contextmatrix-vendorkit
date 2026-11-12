@@ -669,6 +669,36 @@ func TestMapperCapsReasons(t *testing.T) {
 	}
 }
 
+func TestMapperBudgetStop(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		opts       mapperOpts
+		wantReason string
+		wantOutput string
+	}{
+		{"final answer crosses the budget", "synthetic/max_budget_end_turn.jsonl", mapperOpts{}, "done", "ok"},
+		{"final answer crosses the budget in a session", "synthetic/max_budget_end_turn.jsonl", mapperOpts{Session: true}, "done", "ok"},
+		{"requested tool never runs", "synthetic/max_budget_tool_use.jsonl", mapperOpts{}, "max_cost", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evs, res, err := replay(t, tc.path, tc.opts)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantReason, res.Reason)
+			assert.Equal(t, tc.wantReason == "done", res.Completed)
+			assert.Equal(t, tc.wantOutput, res.Output)
+			assert.Empty(t, ofKind(evs, events.ErrorKind))
+
+			if !tc.opts.Session {
+				st := stops(evs)
+				require.Len(t, st, 1)
+				assert.Equal(t, tc.wantReason, st[0].Data["stop"])
+			}
+		})
+	}
+}
+
 func TestMapperUnknownTerminalReason(t *testing.T) {
 	t1 := readFixture(t, "real/t1.jsonl")
 

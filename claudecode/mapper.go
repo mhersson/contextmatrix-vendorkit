@@ -160,6 +160,7 @@ type mapper struct {
 	streamedTotal tokenBuckets
 	subscription  []protocol.SubscriptionUsage
 	lastText      string
+	lastEndTurn   bool // the last closed call ended end_turn with no tool use
 
 	sawResult bool
 	finished  bool
@@ -681,6 +682,8 @@ func (m *mapper) closeCall() {
 		finishReason = c.lineStop
 	}
 
+	m.lastEndTurn = finishReason == "end_turn" && len(c.tools) == 0
+
 	m.emit(events.ModelResponse, map[string]any{
 		"turn": c.turn, "content": m.mask(content), "content_len": len(content),
 		"tool_calls": len(c.tools), "finish_reason": finishReason, "model": c.model,
@@ -792,6 +795,13 @@ func (m *mapper) outcome(l streamLine) (string, error) {
 	case l.Subtype == "error_max_turns":
 		return "max_turns", nil
 	case l.Subtype == "error_max_budget_usd":
+		// The CLI checks the budget after a call, so a final answer can cross it.
+		if m.lastEndTurn {
+			m.res.Output = m.mask(m.lastText)
+
+			return "done", nil
+		}
+
 		return "max_cost", nil
 	case !l.IsError:
 		// terminal_reason is not consulted, so a release that drops or renames
