@@ -119,7 +119,7 @@ func run(ctx context.Context, spec Spec, o runOpts) (res harness.Result, err err
 	m := newMapper(mapperOpts{
 		Emitter: spec.Emitter, Redact: spec.Redact, Secret: spec.OAuthToken,
 		OnDelta: spec.OnDelta, OnRateLimit: spec.OnRateLimit,
-		Prefix: bridgePrefix, Terminal: l.terminal,
+		Prefix: bridgePrefix, Servers: serverNames(spec.MCPServers), Terminal: l.terminal,
 		SystemPrompt: spec.SystemPrompt, Task: spec.Task, TaskImages: spec.TaskImages,
 	})
 

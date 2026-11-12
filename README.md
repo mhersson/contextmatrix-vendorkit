@@ -50,6 +50,9 @@ Errors to branch on:
 - `*UsageLimitError` (`errors.As`): a subscription usage limit stopped the run
   or ended the session. Park or show the state; never retry.
 - `ErrNotLoggedIn` (`errors.Is`): Claude Code did not accept the token.
+- A bridge or `Spec.MCPServers` server that Claude Code reports `failed` or
+  `needs-auth` at init stops the run, or ends the session, with an error naming
+  it (`Result.Reason` `"error"`).
 - Cancellation: the error wraps `context.Cause(ctx)` and `Result.Reason` is
   `"canceled"`. A cancel that arrives after the result line keeps that
   result's outcome.

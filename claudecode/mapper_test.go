@@ -1276,12 +1276,49 @@ func TestMapperBridgeFailed(t *testing.T) {
 	assert.Empty(t, ofKind(evs, events.ModelRequest), "nothing after init is processed")
 	require.Len(t, ofKind(evs, events.ErrorKind), 1)
 
-	t.Run("other servers do not stop the run", func(t *testing.T) {
-		data := rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":[{"name":"other","status":"failed"}]`)
+	initWith := func(servers string) []byte {
+		return rewrite(readFixture(t, "real/t1.jsonl"), `"mcp_servers":[]`, `"mcp_servers":`+servers)
+	}
 
-		stopped, _, _, err := feedUntilStop(t, data, mapperOpts{Prefix: "mcp__cm__"}, nil, nil)
-		require.NoError(t, err)
-		assert.True(t, stopped, "only the result stops a Run")
+	for _, tc := range []struct{ name, server, servers string }{
+		{"configured server failed", "extra", `[{"name":"extra","status":"failed"}]`},
+		{"configured server needs auth", "extra", `[{"name":"extra","status":"needs-auth"}]`},
+		{"bridge needs auth", "cm", `[{"name":"cm","status":"needs-auth"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}}
+
+			stopped, evs, res, err := feedUntilStop(t, initWith(tc.servers), opts, errors.New("signal: killed"), nil)
+			require.True(t, stopped)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `"`+tc.server+`"`)
+			assert.Equal(t, "error", res.Reason)
+			assert.Empty(t, ofKind(evs, events.ModelRequest))
+		})
+	}
+
+	t.Run("session turn halts with the error", func(t *testing.T) {
+		opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}, Session: true}
+
+		stopped, _, res, err := feedUntilStop(t, initWith(`[{"name":"extra","status":"failed"}]`), opts, errors.New("signal: killed"), nil)
+		require.True(t, stopped)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"extra"`)
+		assert.Equal(t, "error", res.Reason)
+	})
+
+	t.Run("healthy and unconfigured servers do not stop the run", func(t *testing.T) {
+		for _, servers := range []string{
+			`[{"name":"extra","status":"connected"}]`,
+			`[{"name":"extra","status":"pending"}]`,
+			`[{"name":"other","status":"failed"},{"name":"other2","status":"needs-auth"}]`,
+		} {
+			opts := mapperOpts{Prefix: "mcp__cm__", Servers: []string{"extra"}}
+
+			stopped, _, _, err := feedUntilStop(t, initWith(servers), opts, nil, nil)
+			require.NoError(t, err)
+			assert.True(t, stopped, "only the result stops a Run")
+		}
 	})
 }
 

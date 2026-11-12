@@ -14,6 +14,8 @@ import (
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
 	protocol "github.com/mhersson/contextmatrix-protocol"
+
+	"github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
 )
 
 type mapperOpts struct {
@@ -22,7 +24,8 @@ type mapperOpts struct {
 	Secret      string              // always masked in every emitted or returned string
 	OnDelta     func(llm.Delta)
 	OnRateLimit func(RateLimit)
-	Prefix      string // "mcp__cm__", stripped from bridged tool names
+	Prefix      string   // "mcp__cm__", stripped from bridged tool names
+	Servers     []string // Spec.MCPServers names, held to the bridge's init standard
 	Terminal    func() (string, json.RawMessage, bool)
 	Session     bool // per-turn accounting from model_usage_since_last_result
 
@@ -172,7 +175,7 @@ type mapper struct {
 	toolNames    map[string]string // tool_use id to raw name, for closed calls
 	limit        *UsageLimitError
 	authFailed   bool
-	bridgeErr    error
+	serverErr    error
 	lastRL       RateLimit
 
 	sid     string
@@ -258,15 +261,18 @@ func (m *mapper) onInit(l streamLine) {
 	m.version = l.ClaudeCodeVersion
 
 	// "mcp__cm__" names the server "cm".
-	server := strings.TrimSuffix(strings.TrimPrefix(m.o.Prefix, "mcp__"), "__")
-	if server == "" {
-		return
-	}
+	bridge := strings.TrimSuffix(strings.TrimPrefix(m.o.Prefix, "mcp__"), "__")
 
 	for _, s := range l.MCPServers {
-		if s.Name == server && s.Status == "failed" {
-			m.bridgeErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP bridge server %q failed to start", server)))
+		if s.Status != "failed" && s.Status != "needs-auth" {
+			continue
+		}
+
+		if (bridge != "" && s.Name == bridge) || slices.Contains(m.o.Servers, s.Name) {
+			m.serverErr = errors.New(m.mask(fmt.Sprintf("claudecode: MCP server %q reported %s", s.Name, s.Status)))
 			m.halted = true
+
+			return
 		}
 	}
 }
@@ -307,8 +313,8 @@ func (m *mapper) finish(procErr error) (harness.Result, error) {
 	switch {
 	case m.limit != nil:
 		m.conclude("error", m.limit)
-	case m.bridgeErr != nil:
-		m.conclude("error", m.bridgeErr)
+	case m.serverErr != nil:
+		m.conclude("error", m.serverErr)
 	case m.backstop:
 		// vendorkit stopped the process itself, so procErr says nothing.
 		m.conclude("done", nil)
@@ -876,4 +882,13 @@ func deref(v *int64) int64 {
 	}
 
 	return *v
+}
+
+func serverNames(servers []mcpbridge.ServerConfig) []string {
+	names := make([]string, 0, len(servers))
+	for _, s := range servers {
+		names = append(names, s.Name)
+	}
+
+	return names
 }

@@ -186,7 +186,7 @@ func (s *Session) Send(ctx context.Context, text string, images []llm.ImageURL) 
 	m := newMapper(mapperOpts{
 		Emitter: s.spec.Emitter, Redact: s.spec.Redact, Secret: s.spec.OAuthToken,
 		OnDelta: s.spec.OnDelta, OnRateLimit: s.spec.OnRateLimit,
-		Prefix: bridgePrefix, Session: true, Task: text, TaskImages: images,
+		Prefix: bridgePrefix, Servers: serverNames(s.spec.MCPServers), Session: true, Task: text, TaskImages: images,
 	})
 	m.subscription, m.lastRL = s.subscription, s.lastRL
 
