@@ -166,6 +166,21 @@ func TestBridgeServesTools(t *testing.T) {
 	assert.Equal(t, "hi", text(t, res.Content[0]))
 }
 
+// The CLI parses this _meta key to keep a large bridged result whole.
+func TestBridgeToolsDeclareResultSize(t *testing.T) {
+	sess := connect(t, startBridge(t, testRegistry()))
+
+	list, err := sess.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, list.Tools)
+
+	for _, tl := range list.Tools {
+		size, ok := tl.Meta["anthropic/maxResultSizeChars"].(float64)
+		require.True(t, ok, "tool %s declares no result size", tl.Name)
+		assert.InDelta(t, float64(maxResultSizeChars), size, 0, tl.Name)
+	}
+}
+
 func TestBridgeToolErrorIsMCPError(t *testing.T) {
 	sess := connect(t, startBridge(t, testRegistry()))
 

@@ -96,6 +96,10 @@ Events are the harness kinds, in harness order. The ones that differ:
   not overridable through `Spec.Env`). A task finishing between `Session` turns
   makes 2.1.322 run an unsolicited turn that `Session` would drop or hand to an
   overlapping `Send`; the CLI now refuses `run_in_background`.
+- The bridge declares `_meta["anthropic/maxResultSizeChars"]` 400,000 on every
+  tool. Without it 2.1.322 replaces a bridged result over about 50,000 chars
+  with a 2 KB `<persisted-output>` preview and a file path
+  instead of the result; 400,000 is above every backend's tool cap.
 - Process lifecycle: the CLI runs in its own process group. 2.1.322's Bash
   tool starts children with `setsid`, which leaves that group; on Linux
   `subproc` kills such escaped descendants before the SIGKILL escalation. On

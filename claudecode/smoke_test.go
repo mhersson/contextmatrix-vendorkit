@@ -137,6 +137,33 @@ func TestSmokeAgainstMockAPI(t *testing.T) {
 	}
 }
 
+// TestSmokeBridgedResultWhole proves a bridged result over the CLI's default
+// persist threshold reaches the API whole: the mock reports the length and tail
+// of the tool_result it received.
+func TestSmokeBridgedResultWhole(t *testing.T) {
+	binary, mockURL := smokeTarget(t)
+
+	const marker = "BIG-END-7f3a"
+
+	spec, opts, _ := smokeRun(t, binary, mockURL)
+	spec.Task = "Call big."
+	spec.Tools = tools.NewRegistry(stubTool{name: "big", exec: func(map[string]any) (tools.Result, error) {
+		return tools.Result{Text: strings.Repeat("a", 60_000) + marker}, nil
+	}})
+
+	res, err := run(t.Context(), spec, opts)
+	require.NoError(t, err)
+
+	var got struct {
+		Len  int    `json:"len"`
+		Tail string `json:"tail"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(res.Output), &got), res.Output)
+	assert.Equal(t, 60_000+len(marker), got.Len)
+	assert.True(t, strings.HasSuffix(got.Tail, marker), got.Tail)
+}
+
 // TestSmokeCancelKillsBashChild cancels a run while the Bash built-in waits on
 // a long-lived child and checks that the child goes with the run.
 func TestSmokeCancelKillsBashChild(t *testing.T) {
